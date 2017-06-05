@@ -6,7 +6,11 @@
 #include <objbase.h>
 #include <cstring>
 #include <ctime>
+#include <WinIoCtl.h>
 #include "log.h"
+
+//#include "stdafx.h"
+
 
 typedef HRESULT (_stdcall *CoInitialize___)(LPVOID);
 typedef HRESULT (_stdcall *CVBC)(IVssBackupComponents**);
@@ -44,7 +48,7 @@ void printhelp(char *cmd,bool err = false,char error[] = "ERROR PARSING OPTIONS!
             //"-c|-context         BACKUP|FILE_SHARE_BACKUP|NAS_ROLLBACK|APP_ROLLBACK|LIENT_ACCESSIBLE(dafault)\n"
             //"                    |CLIENT_ACCESSIBLE_WRITERS Processing a shadow copy with the specified context.\n"
             //"\n"
-            //"-r|-remove-old   Remove all shadow copies for the destination volume (exclude current)\n"
+            //"-r|-remove-old      Remove all shadow copies for the destination volume (exclude current)\n"
             //"                    after the snapshot was successfully created. This option has no values.\n"
             //"\n"
             //"-d|-dry-run         analog -context FILE_SHARE_BACKUP, This option has no values. Incompatible with -context.\n"
@@ -53,12 +57,12 @@ void printhelp(char *cmd,bool err = false,char error[] = "ERROR PARSING OPTIONS!
             "                    [PATH] - save log to specified log file (default path is ./vssadmin.log).\n"
             "\n"
             //"-s|-services        With no value - Try to start windows vss services befor backup.\n"
-            //"                    force-start - Try to start windows vss services befor backup, even if the service is disabled.\n"
+            //"                    force-start|force - Try to start windows vss services befor backup, even if the service is disabled.\n"
             //"\n"
-            //"-raw                Take out to the output stream the contents of the shadow copy instead of the device line\n"
+            "-raw                Take out to the output stream the contents of the shadow copy instead of the device line\n"
             //"                    [PATH] - save raw out (image) specified file.\n"
             //"\n"
-            //"-component-mode     [ENABLE|DISABLE] Processing a shadow copy in component mode.\n"
+            "-component-mode     Processing a shadow copy in component mode. This option has no values.\n"
             ;
     if (err) std::cerr<<error<<"\nUsage: "<<cmd<<m;
     else std::cout<<"This program makes a shadow copy of the specified volume and returns the device's string for the shadow copy.\nUsage: "<<cmd<<m;
@@ -68,7 +72,9 @@ int main(int argc, char* argv[])
 {
     char drive = 'C';
     char *logfile = NULL;
+    char *rawfile = NULL;
     bool xp = false;
+    int parsedOpts = NULL;
     if (argc >= 2)
     {
         if (!strcmp(argv[1],"--help")
@@ -79,6 +85,7 @@ int main(int argc, char* argv[])
                 ||!strcmp(argv[1],"-H")
                 )
         {
+            parsedOpts++;
             printhelp(argv[0]);
             return 0;
         }
@@ -90,6 +97,7 @@ int main(int argc, char* argv[])
                  ||!strcmp(argv[1],"--ver")
                  )
         {
+            parsedOpts++;
             std::cout << PROGVER;
         }
         else if (strlen(argv[1])==3)
@@ -98,8 +106,11 @@ int main(int argc, char* argv[])
             {
                 char L=argv[1][0];//for simpe read code only
                 if (L>'A'&&L<'Z'||L>'a'&&L<'z')
+                {
                     drive = L;
-            }//else{printhelp(argv[0],1);return 1;}
+                    parsedOpts++;
+                }
+            }
         }
         for (int i = 1;i < argc;i++)
         {
@@ -114,15 +125,18 @@ int main(int argc, char* argv[])
             if (!strcmp(argv[i],"-log")||!strcmp(argv[i],"-l"))
             {
                 logMode = true;
+                parsedOpts++;
                 if ((argc > i+1) && (argv[i+1][0] != '-'))
                 {
                     logfile = new char[]=argv[i+1];
                     i++;
+                    parsedOpts++;
                 }else{logfile = new char[]=LOGFILE;}
             }
             if (!strcmp(argv[i],"-remove-old")||!strcmp(argv[i],"-r"))
             {
-                ;
+                removeOld = true;
+                parsedOpts++;
             }
             if (!strcmp(argv[i],"-dry-run")||!strcmp(argv[i],"-d"))
             {
@@ -131,10 +145,18 @@ int main(int argc, char* argv[])
             if (!strcmp(argv[i],"-raw"))
             {
                 rawMode = true;
+                parsedOpts++;
+                if ((argc > i+1) && (argv[i+1][0] != '-'))
+                {
+                    rawfile = new char[]=argv[i+1];
+                    i++;
+                    parsedOpts++;
+                }
             }
             if (!strcmp(argv[i],"-component-mode"))
             {
                 compMode = true;
+                parsedOpts++;
             }
         }
         //printhelp(argv[0],1);return 1;
@@ -144,14 +166,15 @@ int main(int argc, char* argv[])
     {
         bool logfileopentest = log.LogFileOpen(logfile);
         if (!logfileopentest){
-        char *err = new char[28+strlen(logfile)+strlen(strerror(log.error))];
-        strcpy(err,"Can not open the log file: ");
-        strcat(err,logfile);
-        strcat(err," ");
-        strcat(err,strerror(log.error));
-        printhelp(argv[0],1,err);
-        return 1;}
+            char *err = new char[28+strlen(logfile)+strlen(strerror(log.error))];
+            strcpy(err,"Can not open the log file: ");
+            strcat(err,logfile);
+            strcat(err," ");
+            strcat(err,strerror(log.error));
+            printhelp(argv[0],1,err);
+            return 1;}
     }
+    if (parsedOpts != argc-1){printhelp(argv[0],1);return 1;}
     TCHAR vol[] = {drive,':','\\','\0'};
     HMODULE ole32dll = LoadLibrary(TEXT("ole32.dll"));
     if (!ole32dll)
@@ -172,6 +195,10 @@ int main(int argc, char* argv[])
         {
             cvbc = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z");
             xp = true;
+
+            //temp
+            printError("Windows XP or 2003 is not supported in this version.\n");
+            return 0;
 
         }
         CoInitialize___ CoInitialize = (CoInitialize___)GetProcAddress(ole32dll, "CoInitialize");
@@ -221,7 +248,7 @@ int main(int argc, char* argv[])
                 printError("\n",0);
                 return -1;
             }
-            if (!SUCCEEDED(backupComponents->SetBackupState(FALSE, drive == 'C', VSS_BT_FULL)))
+            if (!SUCCEEDED(backupComponents->SetBackupState(compMode, drive == 'C', VSS_BT_FULL)))
             {
                 printError("Error in backupComponents->SetBackupState!\n");
                 return -1;
@@ -270,8 +297,8 @@ int main(int argc, char* argv[])
                     printError("The caller is out of memory or other system resources.");
                 if (result == 0x8004232CL)
                     printError("The specified volume is nested too deeply to participate in the VSS operation. Possible reasons for this error include the following:\n"
-                                 "Trying to create a shadow copy of a volume that resides on a VHD that is contained in another VHD.\n"
-                                 "Trying to create a shadow copy of a VHD volume when the volume that contains the VHD is also in the same shadow copy set.");
+                               "Trying to create a shadow copy of a volume that resides on a VHD that is contained in another VHD.\n"
+                               "Trying to create a shadow copy of a VHD volume when the volume that contains the VHD is also in the same shadow copy set.");
                 if (result == VSS_E_OBJECT_NOT_FOUND)
                     printError("pwszVolumeName does not correspond to an existing volume or remote file share");
                 if (result == VSS_E_PROVIDER_NOT_REGISTERED)
@@ -405,7 +432,29 @@ The provider returned an unexpected error code. This can be a transient problem.
                 printError("Handle error in GetSnapshotProperties!\n");
                 return -1;
             }
-            std::wcout << prop.m_pwszSnapshotDeviceObject << "\n";
+            if (!rawMode) std::wcout << prop.m_pwszSnapshotDeviceObject << "\n";
+            else
+            {
+                DWORD nRead;
+                byte buf[512*2*4];
+
+                HANDLE hDisk = CreateFile(prop.m_pwszSnapshotDeviceObject,
+                                          GENERIC_READ, FILE_SHARE_READ,
+                                          NULL, OPEN_EXISTING, 0, NULL);
+                if (!hDisk)
+                {
+                    printError("Error open snapshot device object\n");
+                    return -1;
+                }
+                while (ReadFile(hDisk, buf, 512*2*4, &nRead, NULL))
+                {
+                   if (rawfile)
+                   {
+                       std::cout << buf;
+                   }else std::cout << buf;
+                }
+                CloseHandle(hDisk);
+            }
             backupComponents->Release();
         }
         else
