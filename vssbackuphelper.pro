@@ -3,7 +3,10 @@ CONFIG += console
 CONFIG -= app_bundle
 CONFIG -= qt
 
-SOURCES += main.cpp
+SOURCES += main.cpp \
+    log.cpp
 
-include(deployment.pri)
+HEADERS += \
+    log.h
+
 
