@@ -7,13 +7,12 @@
 #include <cstring>
 #include <ctime>
 #include <WinIoCtl.h>
+#include <Winternl.h>
 #include "log.h"
-
-//#include "stdafx.h"
-
 
 typedef HRESULT (_stdcall *CoInitialize___)(LPVOID);
 typedef HRESULT (_stdcall *CVBC)(IVssBackupComponents**);
+typedef HRESULT (_stdcall *NtDeviceIoControlFile___)(HANDLE,HANDLE,PIO_APC_ROUTINE,PVOID,PIO_STATUS_BLOCK,ULONG,PVOID,ULONG,PVOID,ULONG);
 
 #define PROGVER "This test buil has no version.\n"
 #define LOGFILE "./vssadmin.log"
@@ -23,16 +22,24 @@ extern bool compMode = false;
 extern bool serviceMode = false;
 extern bool serviceForce = false;
 extern bool removeOld = false;
-LOG log;
+extern LOG log;
+extern unsigned char logLevel = 1;
+extern _VSS_BACKUP_TYPE bkpType = VSS_BT_FULL;
+extern _VSS_SNAPSHOT_CONTEXT bkpContext = VSS_CTX_CLIENT_ACCESSIBLE;
+
+
 
 void printError(char * error,bool timestamp = logMode)
 {
     const time_t ctt = time(0);
-    char*tm,*sep = " ";
-    if (timestamp) tm = asctime(localtime(&ctt));
-    else sep = tm = "";
-    if (logMode) log.logfile << tm << " " << error;
-    else std::cerr << tm << " " << error;
+    char*tm;
+    if (timestamp){
+        tm = asctime(localtime(&ctt));
+        tm[strlen(tm)-1] = ' ';
+    }
+    else tm = "";
+    if (logMode) log.logfile << tm << error;
+    else std::cerr << tm << error;
 }
 
 void printhelp(char *cmd,bool err = false,char error[] = "ERROR PARSING OPTIONS!")
@@ -41,32 +48,37 @@ void printhelp(char *cmd,bool err = false,char error[] = "ERROR PARSING OPTIONS!
                "where D:\\ - destination volume (default C:\\) this argument must be first or not specified!\n"
                "Options:            Values:\n"
                "-h|-help            Show this help.\n\n"
-               "-v|-ver|-version    Show version and exit.\n\n"
-            //"-t|-type            FULL(dafault)|INCREMENTAL|DIFFERENTIAL|LOG|COPY\n"
-            //"                    Processing a shadow copy with the specified type.\n"
-            //"\n"
-            //"-c|-context         BACKUP|FILE_SHARE_BACKUP|NAS_ROLLBACK|APP_ROLLBACK|LIENT_ACCESSIBLE(dafault)\n"
-            //"                    |CLIENT_ACCESSIBLE_WRITERS Processing a shadow copy with the specified context.\n"
-            //"\n"
+               "-v|-ver|-version    Show version. !WARNINIG -v is NOT be verbose! Use -log-level 2|3|4 for debug out.\n\n"
+            "-t|-type            FULL(dafault)|INCREMENTAL|DIFFERENTIAL|LOG|COPY\n"
+            "                    Processing a shadow copy with the specified type.\n"
+            "\n"
+            "-c|-context         BACKUP|FILE_SHARE_BACKUP|NAS_ROLLBACK|APP_ROLLBACK|CLIENT_ACCESSIBLE(dafault)\n"
+            "                    |CLIENT_ACCESSIBLE_WRITERS Processing a shadow copy with the specified context.\n"
+            "\n"
             //"-r|-remove-old      Remove all shadow copies for the destination volume (exclude current)\n"
             //"                    after the snapshot was successfully created. This option has no values.\n"
             //"\n"
-            //"-d|-dry-run         analog -context FILE_SHARE_BACKUP, This option has no values. Incompatible with -context.\n"
-            //"\n"
+            "-d|-dry-run         analog -context FILE_SHARE_BACKUP, This option has no values. Incompatible with -context.\n"
+            "\n"
             "-l|-log             With no value - do not use error stream for error messages, write it to log file.\n"
-            "                    [PATH] - save log to specified log file (default path is ./vssadmin.log).\n"
+            "                    [<PATH>] - save log to specified log file (default path is ./vssadmin.log).\n"
             "\n"
             //"-s|-services        With no value - Try to start windows vss services befor backup.\n"
             //"                    force-start|force - Try to start windows vss services befor backup, even if the service is disabled.\n"
             //"\n"
             "-raw                Take out to the output stream the contents of the shadow copy instead of the device line\n"
-            //"                    [PATH] - save raw out (image) specified file.\n"
-            //"\n"
+            "                    [<PATH>] - save raw out (image) to the specified file.\n"
+            "\n"
             "-component-mode     Processing a shadow copy in component mode. This option has no values.\n"
+            "\n"
+            "-log-level          error|warn|info|debug or 1-4 level of logging. Default value is \"error\" aka 1.\n"
+            "\n"
             ;
     if (err) std::cerr<<error<<"\nUsage: "<<cmd<<m;
     else std::cout<<"This program makes a shadow copy of the specified volume and returns the device's string for the shadow copy.\nUsage: "<<cmd<<m;
 }
+
+LOG log;
 
 int main(int argc, char* argv[])
 {
@@ -75,6 +87,8 @@ int main(int argc, char* argv[])
     char *rawfile = NULL;
     bool xp = false;
     int parsedOpts = NULL;
+    logLevel = 1;
+
     if (argc >= 2)
     {
         if (!strcmp(argv[1],"--help")
@@ -99,6 +113,7 @@ int main(int argc, char* argv[])
         {
             parsedOpts++;
             std::cout << PROGVER;
+            //return 0;
         }
         else if (strlen(argv[1])==3)
         {
@@ -114,13 +129,94 @@ int main(int argc, char* argv[])
         }
         for (int i = 1;i < argc;i++)
         {
+            if (!strcmp(argv[i],"-services")||!strcmp(argv[i],"-s"))
+            {
+                parsedOpts++;
+                serviceMode = true;
+
+                if ((argc > i+1) && (argv[i+1][0] != '-'))
+                {
+                    if (argv[i+1] == "force-start"||argv[i+1] == "force")
+                    {
+                        parsedOpts++;
+                        serviceForce = true;
+                    }
+                }
+            }
             if (!strcmp(argv[i],"-type")||!strcmp(argv[i],"-t"))
             {
-                ;
+                parsedOpts++;
+                if ((argc > i+1) && (argv[i+1][0] != '-'))
+                {
+                    if (argv[i+1] == "FULL")
+                    {
+                        parsedOpts++;
+                        bkpType = VSS_BT_FULL;
+                    }
+                    if (argv[i+1] == "INCREMENTAL")
+                    {
+                        parsedOpts++;
+                        bkpType = VSS_BT_INCREMENTAL;
+                    }
+                    if (argv[i+1] == "DIFFERENTIAL")
+                    {
+                        parsedOpts++;
+                        bkpType = VSS_BT_DIFFERENTIAL;
+                    }
+                    if (argv[i+1] == "LOG")
+                    {
+                        parsedOpts++;
+                        bkpType = VSS_BT_LOG;
+                    }
+                    if (argv[i+1] == "COPY")
+                    {
+                        parsedOpts++;
+                        bkpType = VSS_BT_COPY;
+                    }
+                }
             }
             if (!strcmp(argv[i],"-context")||!strcmp(argv[i],"-c"))
             {
-                ;
+                parsedOpts++;
+                if ((argc > i+1) && (argv[i+1][0] != '-'))
+                {
+                    if (argv[i+1] == "BACKUP")
+                    {
+                        parsedOpts++;
+                        bkpContext = VSS_CTX_BACKUP;
+                    }
+                    if (argv[i+1] == "FILE_SHARE_BACKUP")
+                    {
+                        parsedOpts++;
+                        bkpContext = VSS_CTX_FILE_SHARE_BACKUP;
+                    }
+                    if (argv[i+1] == "NAS_ROLLBACK")
+                    {
+                        parsedOpts++;
+                        bkpContext = VSS_CTX_NAS_ROLLBACK;
+                    }
+                    if (argv[i+1] == "APP_ROLLBACK")
+                    {
+                        parsedOpts++;
+                        bkpContext = VSS_CTX_APP_ROLLBACK;
+                    }
+                    if (argv[i+1] == "CLIENT_ACCESSIBLE")
+                    {
+                        parsedOpts++;
+                        bkpContext = VSS_CTX_CLIENT_ACCESSIBLE;
+                    }
+                    if (argv[i+1] == "CLIENT_ACCESSIBLE_WRITERS")
+                    {
+                        parsedOpts++;
+                        bkpContext = VSS_CTX_CLIENT_ACCESSIBLE_WRITERS;
+                    }
+                }
+            }
+            if (!strcmp(argv[i],"-dry-run")||!strcmp(argv[i],"-d"))
+            {
+                parsedOpts++;
+                bkpContext = VSS_CTX_FILE_SHARE_BACKUP;
+
             }
             if (!strcmp(argv[i],"-log")||!strcmp(argv[i],"-l"))
             {
@@ -138,10 +234,6 @@ int main(int argc, char* argv[])
                 removeOld = true;
                 parsedOpts++;
             }
-            if (!strcmp(argv[i],"-dry-run")||!strcmp(argv[i],"-d"))
-            {
-                ;
-            }
             if (!strcmp(argv[i],"-raw"))
             {
                 rawMode = true;
@@ -157,6 +249,33 @@ int main(int argc, char* argv[])
             {
                 compMode = true;
                 parsedOpts++;
+            }
+            if (!strcmp(argv[i],"-log-level"))
+            {
+                parsedOpts++;
+                if ((argc > i+1) && (argv[i+1][0] != '-'))
+                {
+                    if (argv[i+1] == "error"||argv[i+1] == "1")
+                    {
+                        parsedOpts++;
+                        logLevel = 1;
+                    }
+                    if (argv[i+1] == "warn"||argv[i+1] == "2")
+                    {
+                        parsedOpts++;
+                        logLevel = 2;
+                    }
+                    if (argv[i+1] == "info"||argv[i+1] == "3")
+                    {
+                        parsedOpts++;
+                        logLevel = 3;
+                    }
+                    if (argv[i+1] == "debug"||argv[i+1] == "4")
+                    {
+                        parsedOpts++;
+                        logLevel = 4;
+                    }
+                }
             }
         }
         //printhelp(argv[0],1);return 1;
@@ -175,6 +294,9 @@ int main(int argc, char* argv[])
             return 1;}
     }
     if (parsedOpts != argc-1){printhelp(argv[0],1);return 1;}
+
+    //ENDPASRSEOPTION
+
     TCHAR vol[] = {drive,':','\\','\0'};
     HMODULE ole32dll = LoadLibrary(TEXT("ole32.dll"));
     if (!ole32dll)
@@ -194,12 +316,19 @@ int main(int argc, char* argv[])
         if(!cvbc)
         {
             cvbc = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z");
+            if (!cvbc)
+            {
+                cvbc  = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z");
+                if (!cvbc)
+                {
+                    printError("Error get API CreateVssBackupComponents");
+                    return 1;
+                }
+            }
             xp = true;
-
             //temp
             printError("Windows XP or 2003 is not supported in this version.\n");
             return 0;
-
         }
         CoInitialize___ CoInitialize = (CoInitialize___)GetProcAddress(ole32dll, "CoInitialize");
         if (!CoInitialize)
@@ -248,13 +377,13 @@ int main(int argc, char* argv[])
                 printError("\n",0);
                 return -1;
             }
-            if (!SUCCEEDED(backupComponents->SetBackupState(compMode, drive == 'C', VSS_BT_FULL)))
+            if (!SUCCEEDED(backupComponents->SetBackupState(compMode, drive == 'C', bkpType)))
             {
                 printError("Error in backupComponents->SetBackupState!\n");
                 return -1;
             }
             if (!xp){
-                if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_CLIENT_ACCESSIBLE)))
+                if (!SUCCEEDED(backupComponents->SetContext(bkpContext)))
                 {
                     if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_BACKUP)))
                     {
@@ -320,101 +449,36 @@ int main(int argc, char* argv[])
             if (!SUCCEEDED(result = backupComponents->DoSnapshotSet(&async)))
             {
                 printError("Error in backupComponents->DoSnapshotSet!\n");
-                /*
-E_ACCESSDENIED
-
-
-
-The caller does not have sufficient backup privileges or is not an administrator.
-
-E_INVALIDARG
-
-
-
-ppAsyncdoes not point to a valid pointer; that is, it is NULL.
-
-E_OUTOFMEMORY
-
-
-
-The caller is out of memory or other system resources.
-
-VSS_E_BAD_STATE
-
-
-
-The backup components object has not been initialized or the prerequisite calls for a given shadow copy context have not been made prior to calling DoSnapshotSet.
-
-VSS_E_INSUFFICIENT_STORAGE
-
-
-
-The system or provider has insufficient storage space. If possible delete any old or unnecessary persistent shadow copies and try again. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.
-
-VSS_E_FLUSH_WRITES_TIMEOUT
-
-
-
-The system was unable to flush I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.
-
-VSS_E_HOLD_WRITES_TIMEOUT
-
-
-
-The system was unable to hold I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.
-
-VSS_E_NESTED_VOLUME_LIMIT
-
-
-
-The specified volume is nested too deeply to participate in the VSS operation.
-
-Windows Server 2008, Windows Vista, Windows Server 2003 and Windows XP:  This return code is not supported.
-
-VSS_E_PROVIDER_VETO
-
-
-
-The provider was unable to perform the request at this time. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.
-
-VSS_E_REBOOT_REQUIRED
-
-
-
-The provider encountered an error that requires the user to restart the computer.
-
-Windows Server 2003 and Windows XP:  This value is not supported.
-
-VSS_E_TRANSACTION_FREEZE_TIMEOUT
-
-
-
-The system was unable to freeze the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).
-
-Windows Server 2003 and Windows XP:  This value is not supported.
-
-VSS_E_TRANSACTION_THAW_TIMEOUT
-
-
-
-The system was unable to thaw the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).
-
-Windows Server 2003 and Windows XP:  This value is not supported.
-
-VSS_E_UNEXPECTED
-
-
-
-Unexpected error. The error code is logged in the error log file. For more information, see Event and Error Handling Under VSS.
-
-Windows Server 2008, Windows Vista, Windows Server 2003 and Windows XP:  This value is not supported until Windows Server 2008 R2 and Windows 7. E_UNEXPECTED is used instead.
-
-VSS_E_UNEXPECTED_PROVIDER_ERROR
-
-
-
-The provider returned an unexpected error code. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.
-                */
+                if (result == E_ACCESSDENIED)
+                    printError("The caller does not have sufficient backup privileges or is not an administrator.");
+                if (result == E_INVALIDARG)
+                    printError("ppAsyncdoes not point to a valid pointer; that is, it is NULL.");
+                if (result == E_OUTOFMEMORY)
+                    printError("aThe caller is out of memory or other system resources.");
+                if (result == VSS_E_BAD_STATE)
+                    printError("The backup components object has not been initialized or the prerequisite calls for a given shadow copy context have not been made prior to calling DoSnapshotSet.");
+                if (result == VSS_E_INSUFFICIENT_STORAGE)
+                    printError("The system or provider has insufficient storage space. If possible delete any old or unnecessary persistent shadow copies and try again. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
+                if (result == VSS_E_FLUSH_WRITES_TIMEOUT)
+                    printError("The system was unable to flush I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.");
+                if (result == VSS_E_HOLD_WRITES_TIMEOUT)
+                    printError("The system was unable to hold I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.");
+                if (result == VSS_E_NESTED_VOLUME_LIMIT)
+                    printError("The specified volume is nested too deeply to participate in the VSS operation.");
+                if (result == VSS_E_PROVIDER_VETO)
+                    printError("The provider was unable to perform the request at this time. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. "
+                               "This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
+                if (result == VSS_E_REBOOT_REQUIRED)
+                    printError("The provider encountered an error that requires the user to restart the computer.");
+                if (result == VSS_E_TRANSACTION_FREEZE_TIMEOUT)
+                    printError("The system was unable to freeze the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).");
+                if (result == VSS_E_TRANSACTION_THAW_TIMEOUT)
+                    printError("The system was unable to thaw the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).");
+                if (result == VSS_E_UNEXPECTED)
+                    printError("Unexpected error. The error code is logged in the error log file. For more information, see Event and Error Handling Under VSS.");
+                if (result == VSS_E_UNEXPECTED_PROVIDER_ERROR)
+                    printError("The provider returned an unexpected error code. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
+                printError("\n",0);//*/
                 return -1;
             }
             result = async->Wait();
@@ -435,25 +499,83 @@ The provider returned an unexpected error code. This can be a transient problem.
             if (!rawMode) std::wcout << prop.m_pwszSnapshotDeviceObject << "\n";
             else
             {
+                std::ofstream rfile;
                 DWORD nRead;
-                byte buf[512*2*4];
-
+                unsigned long long rRead = 0;
+                unsigned int buffSize = 4096;
+                unsigned char buf[4096];
+                unsigned long long DiskSize;
+                unsigned long long FreeBytesAvailable;
+                unsigned long long TotalNumberOfFreeBytes;
+                if(!GetDiskFreeSpaceEx(vol,
+                                       (PULARGE_INTEGER)&FreeBytesAvailable,
+                                       (PULARGE_INTEGER)&DiskSize,
+                                       (PULARGE_INTEGER)&TotalNumberOfFreeBytes
+                                       ))
+                {
+                    printError("Error get destination volume size\n");
+                    printError("Errcode is ",0);
+                    printError(itoa(GetLastError(),0,10));
+                    printError("\n",0);
+                    return -1;
+                }
                 HANDLE hDisk = CreateFile(prop.m_pwszSnapshotDeviceObject,
                                           GENERIC_READ, FILE_SHARE_READ,
                                           NULL, OPEN_EXISTING, 0, NULL);
                 if (!hDisk)
                 {
-                    printError("Error open snapshot device object\n");
+                    printError("Error open snapshot device object.\n");
                     return -1;
                 }
-                while (ReadFile(hDisk, buf, 512*2*4, &nRead, NULL))
+                if (rawfile)
                 {
-                   if (rawfile)
-                   {
-                       std::cout << buf;
-                   }else std::cout << buf;
+                    rfile.open(rawfile,std::ios_base::binary);
+                    if (!rfile.is_open())
+                    {
+                        printError("Error open file: ");
+                        printError(rawfile,0);
+                        printError(" for raw output! ",0);
+                        printError(strerror(errno),0);
+                        printError("\n",0);
+                        return -1;
+                    }
+                }
+                for (ULONGLONG i = DiskSize;i >= buffSize;i=i-buffSize)
+                {
+                    ReadFile(hDisk, buf, buffSize, &nRead, NULL);
+                    rRead = rRead+nRead;
+                    if (rawfile)
+                    {
+                        rfile.write((char*)&buf,buffSize);
+                        if (i==buffSize) rfile.close();
+                    }else std::cout.write((char*)&buf,buffSize);
+
+                }
+                int dot = 0;//for debug
+                dot++;
+                if (rRead < DiskSize)
+                {
+                    ReadFile(hDisk, buf, DiskSize - rRead, &nRead, NULL);
+                    rRead = rRead+nRead;
+                    for (int i=0;i < nRead;i++)
+                    {
+                        if (rawfile)
+                        {
+                            rfile.write((char*)&buf[i],1);
+                        }else std::cout.write((char*)&buf[i],1);
+                    }
+                    if (rawfile)
+                    {
+                        rfile << std::flush;
+                        rfile.close();
+                    }else std::cout << std::flush;
                 }
                 CloseHandle(hDisk);
+                if (logLevel > 2){
+                    char s[20];
+                    itoa(rRead,s,10);
+                    printError(s);
+                    printError(" bytes transfered\n",0);}
             }
             backupComponents->Release();
         }
