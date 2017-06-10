@@ -5,6 +5,7 @@
 #include <vsbackup.h>
 #include <objbase.h>
 #include <cstring>
+#include <string.h>
 #include <ctime>
 #include <WinIoCtl.h>
 #include <Winternl.h>
@@ -14,7 +15,7 @@ typedef HRESULT (_stdcall *CoInitialize___)(LPVOID);
 typedef HRESULT (_stdcall *CVBC)(IVssBackupComponents**);
 typedef HRESULT (_stdcall *NtDeviceIoControlFile___)(HANDLE,HANDLE,PIO_APC_ROUTINE,PVOID,PIO_STATUS_BLOCK,ULONG,PVOID,ULONG,PVOID,ULONG);
 
-#define PROGVER "This test buil has no version.\n"
+#define PROGVER "VSSBackupHelper version 0.0.0.1pa\n"
 #define LOGFILE "./vssadmin.log"
 extern bool logMode = false;
 extern bool rawMode = false;
@@ -42,10 +43,10 @@ void printError(char * error,bool timestamp = logMode)
     else std::cerr << tm << error;
 }
 
-void printhelp(char *cmd,bool err = false,char error[] = "ERROR PARSING OPTIONS!")
+void printhelp(char *cmd,bool err = false,char error[] = "\n\nERROR PARSING OPTIONS!")
 {
     char m[] = " [D:\\] [-option] [VALUE]\n"
-               "where D:\\ - destination volume (default C:\\) this argument must be first or not specified!\n"
+               "where D:\\ - destination volume (default C:\\) this argument must be first or not specified!\n\n"
                "Options:            Values:\n"
                "-h|-help            Show this help.\n\n"
                "-v|-ver|-version    Show version. !WARNINIG -v is NOT be verbose! Use -log-level 2|3|4 for debug out.\n\n"
@@ -55,24 +56,26 @@ void printhelp(char *cmd,bool err = false,char error[] = "ERROR PARSING OPTIONS!
             "-c|-context         BACKUP|FILE_SHARE_BACKUP|NAS_ROLLBACK|APP_ROLLBACK|CLIENT_ACCESSIBLE(dafault)\n"
             "                    |CLIENT_ACCESSIBLE_WRITERS Processing a shadow copy with the specified context.\n"
             "\n"
-            //"-r|-remove-old      Remove all shadow copies for the destination volume (exclude current)\n"
-            //"                    after the snapshot was successfully created. This option has no values.\n"
-            //"\n"
             "-d|-dry-run         analog -context FILE_SHARE_BACKUP, This option has no values. Incompatible with -context.\n"
+            "\n"
+            "-component-mode     Processing a shadow copy in component mode. This option has no values.\n"
             "\n"
             "-l|-log             With no value - do not use error stream for error messages, write it to log file.\n"
             "                    [<PATH>] - save log to specified log file (default path is ./vssadmin.log).\n"
             "\n"
-            //"-s|-services        With no value - Try to start windows vss services befor backup.\n"
-            //"                    force-start|force - Try to start windows vss services befor backup, even if the service is disabled.\n"
-            //"\n"
+            "-log-level          error|warn|info|debug or 1-4 level of logging. Default value is \"error\" aka 1.\n"
+            "\n"
             "-raw                Take out to the output stream the contents of the shadow copy instead of the device line\n"
             "                    [<PATH>] - save raw out (image) to the specified file.\n"
             "\n"
-            "-component-mode     Processing a shadow copy in component mode. This option has no values.\n"
-            "\n"
-            "-log-level          error|warn|info|debug or 1-4 level of logging. Default value is \"error\" aka 1.\n"
-            "\n"
+            //"-r|-remove-old      Remove all shadow copies for the destination volume (exclude current)\n"
+            //"                    after the snapshot was successfully created. This option has no values.\n"
+            //"\n"
+            //"-s|-services        With no value - Try to start windows vss services befor backup.\n"
+            //"                    force-start|force - Try to start windows vss services befor backup, even if the service is disabled.\n"
+            //"\n"
+
+
             ;
     if (err) std::cerr<<error<<"\nUsage: "<<cmd<<m;
     else std::cout<<"This program makes a shadow copy of the specified volume and returns the device's string for the shadow copy.\nUsage: "<<cmd<<m;
@@ -129,6 +132,34 @@ int main(int argc, char* argv[])
         }
         for (int i = 1;i < argc;i++)
         {
+            if (!strcmp(argv[i],"-log-level"))
+            {
+                parsedOpts++;
+                i++;
+                if ((argc > i) && (argv[i][0] != '-'))
+                {
+                    if (!strcmp(argv[i],"error")||!strcmp(argv[i],"1"))
+                    {
+                        parsedOpts++;
+                        logLevel = 1;
+                    }
+                    if (!strcmp(argv[i],"warn")||!strcmp(argv[i],"2"))
+                    {
+                        parsedOpts++;
+                        logLevel = 2;
+                    }
+                    if (!strcmp(argv[i],"info")||!strcmp(argv[i],"3"))
+                    {
+                        parsedOpts++;
+                        logLevel = 3;
+                    }
+                    if (!strcmp(argv[i],"debug")||!strcmp(argv[i],"4"))
+                    {
+                        parsedOpts++;
+                        logLevel = 4;
+                    }
+                }
+            }
             if (!strcmp(argv[i],"-services")||!strcmp(argv[i],"-s"))
             {
                 parsedOpts++;
@@ -250,33 +281,6 @@ int main(int argc, char* argv[])
                 compMode = true;
                 parsedOpts++;
             }
-            if (!strcmp(argv[i],"-log-level"))
-            {
-                parsedOpts++;
-                if ((argc > i+1) && (argv[i+1][0] != '-'))
-                {
-                    if (argv[i+1] == "error"||argv[i+1] == "1")
-                    {
-                        parsedOpts++;
-                        logLevel = 1;
-                    }
-                    if (argv[i+1] == "warn"||argv[i+1] == "2")
-                    {
-                        parsedOpts++;
-                        logLevel = 2;
-                    }
-                    if (argv[i+1] == "info"||argv[i+1] == "3")
-                    {
-                        parsedOpts++;
-                        logLevel = 3;
-                    }
-                    if (argv[i+1] == "debug"||argv[i+1] == "4")
-                    {
-                        parsedOpts++;
-                        logLevel = 4;
-                    }
-                }
-            }
         }
         //printhelp(argv[0],1);return 1;
     }
@@ -284,26 +288,26 @@ int main(int argc, char* argv[])
     if (logMode)// && !log.LogFileOpen(logfile))
     {
         bool logfileopentest = log.LogFileOpen(logfile);
-        if (!logfileopentest){
+        if (!logfileopentest)
+        {
             char *err = new char[28+strlen(logfile)+strlen(strerror(log.error))];
             strcpy(err,"Can not open the log file: ");
             strcat(err,logfile);
             strcat(err," ");
             strcat(err,strerror(log.error));
             printhelp(argv[0],1,err);
-            return 1;}
+            return 1;
+        }
     }
     if (parsedOpts != argc-1){printhelp(argv[0],1);return 1;}
-
-    //ENDPASRSEOPTION
-
+    if (logLevel > 3) printError("End parsing options.\n");
     TCHAR vol[] = {drive,':','\\','\0'};
     HMODULE ole32dll = LoadLibrary(TEXT("ole32.dll"));
     if (!ole32dll)
     {
-        printError("Error! ole32.dll can not load.\n");
-        printError("Errcode is ",0);
-        printError(itoa(GetLastError(),0,10));
+        printError("Error! ole32.dll can not load. ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
         printError("\n",0);
         return -1;
     }
@@ -315,13 +319,18 @@ int main(int argc, char* argv[])
         CVBC cvbc = (CVBC)GetProcAddress(vssapidll, "CreateVssBackupComponentsInternal");
         if(!cvbc)
         {
+            if (logLevel > 1){printError("Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z\n");}
             cvbc = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z");
             if (!cvbc)
             {
+                if (logLevel > 1){printError("Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z\n");}
                 cvbc  = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z");
                 if (!cvbc)
                 {
-                    printError("Error get API CreateVssBackupComponents");
+                    printError("Error get API CreateVssBackupComponents. ");
+                    char s[MAX_PATH] = {0};
+                    if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+                    printError("\n",0);
                     return 1;
                 }
             }
@@ -334,6 +343,9 @@ int main(int argc, char* argv[])
         if (!CoInitialize)
         {
             printError("Error! Can not acces ole32.dll::CoInitialize()\n");
+            char s[MAX_PATH] = {0};
+            if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+            printError("\n",0);
             return -1;
         }
         if (!SUCCEEDED(result = (CoInitialize)(0)))
@@ -377,6 +389,7 @@ int main(int argc, char* argv[])
                 printError("\n",0);
                 return -1;
             }
+            if (logLevel > 1&&drive == 'C')printError("Bootable system state is being performed.\n");
             if (!SUCCEEDED(backupComponents->SetBackupState(compMode, drive == 'C', bkpType)))
             {
                 printError("Error in backupComponents->SetBackupState!\n");
@@ -391,7 +404,10 @@ int main(int argc, char* argv[])
                         {
                             if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_APP_ROLLBACK)))
                             {
-                                printError("Error in backupComponents->SetContext!\n");
+                                printError("Error in backupComponents->SetContext! ");
+                                char s[MAX_PATH] = {0};
+                                if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+                                printError("\n",0);
                                 return -1;
                             }
                         }
@@ -486,19 +502,36 @@ int main(int argc, char* argv[])
 
             if (!SUCCEEDED(result))
             {
-                printError("Error wait for snapshot create!\n");
+                printError("Error wait for snapshot create! ");
+                char s[MAX_PATH] = {0};
+                if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+                printError("\n",0);
                 return -1;
             }
             VSS_SNAPSHOT_PROP prop;
             result = backupComponents->GetSnapshotProperties(snapshotId, &prop);
             if (!SUCCEEDED(result))
             {
-                printError("Handle error in GetSnapshotProperties!\n");
+                printError("Handle error in GetSnapshotProperties! ");
+                char s[MAX_PATH] = {0};
+                if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+                printError("\n",0);
                 return -1;
+            }
+            if (logLevel > 2)
+            {
+                char str[MAX_PATH*2] = {0};
+                sprintf(str,"INFO: The shadow copy was successfully created for volume %ws \n"
+                        "Devise: %ws \n"
+                        "Original volume: %ws \n"
+                        "Machine: %ws \n"
+                        "Service Machine: %ws \n",vol,prop.m_pwszSnapshotDeviceObject,prop.m_pwszOriginalVolumeName,prop.m_pwszOriginatingMachine,prop.m_pwszServiceMachine);
+                printError(str);
             }
             if (!rawMode) std::wcout << prop.m_pwszSnapshotDeviceObject << "\n";
             else
             {
+
                 std::ofstream rfile;
                 DWORD nRead;
                 unsigned long long rRead = 0;
@@ -513,9 +546,9 @@ int main(int argc, char* argv[])
                                        (PULARGE_INTEGER)&TotalNumberOfFreeBytes
                                        ))
                 {
-                    printError("Error get destination volume size\n");
-                    printError("Errcode is ",0);
-                    printError(itoa(GetLastError(),0,10));
+                    printError("ERROR: Can not get destination volume size. ");
+                    char s[MAX_PATH] = {0};
+                    if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
                     printError("\n",0);
                     return -1;
                 }
@@ -524,7 +557,10 @@ int main(int argc, char* argv[])
                                           NULL, OPEN_EXISTING, 0, NULL);
                 if (!hDisk)
                 {
-                    printError("Error open snapshot device object.\n");
+                    printError("ERROR: Can not open snapshot device object. ");
+                    char s[MAX_PATH] = {0};
+                    if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+                    printError("\n",0);
                     return -1;
                 }
                 if (rawfile)
@@ -532,7 +568,7 @@ int main(int argc, char* argv[])
                     rfile.open(rawfile,std::ios_base::binary);
                     if (!rfile.is_open())
                     {
-                        printError("Error open file: ");
+                        printError("ERROR: Can not open output file: ");
                         printError(rawfile,0);
                         printError(" for raw output! ",0);
                         printError(strerror(errno),0);
@@ -543,25 +579,51 @@ int main(int argc, char* argv[])
                 for (ULONGLONG i = DiskSize;i >= buffSize;i=i-buffSize)
                 {
                     ReadFile(hDisk, buf, buffSize, &nRead, NULL);
+                    if (!nRead)
+                    {
+                        printError("ERROR: Can not read the shadow copy. ");
+                        char s[MAX_PATH] = {0};
+                        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+                        printError("\n",0);
+                    }
                     rRead = rRead+nRead;
                     if (rawfile)
                     {
                         rfile.write((char*)&buf,buffSize);
+                        if (rfile.bad())
+                        {
+                            printError("ERROR: Can not write to ");
+                            printError(rawfile,0);
+                            printError(" file. ",0);
+                            printError(strerror(errno),0);
+                            printError("\n",0);
+                            return -1;
+                        }
                         if (i==buffSize) rfile.close();
                     }else std::cout.write((char*)&buf,buffSize);
+
 
                 }
                 int dot = 0;//for debug
                 dot++;
                 if (rRead < DiskSize)
                 {
-                    ReadFile(hDisk, buf, DiskSize - rRead, &nRead, NULL);
+                    ReadFile(hDisk, buf, (DWORD)(DiskSize - rRead), &nRead, NULL);
                     rRead = rRead+nRead;
-                    for (int i=0;i < nRead;i++)
+                    for (unsigned int i=0;i < nRead;i++)
                     {
                         if (rawfile)
                         {
                             rfile.write((char*)&buf[i],1);
+                            if (rfile.bad())
+                            {
+                                printError("ERROR: Can not write to ");
+                                printError(rawfile,0);
+                                printError(" file. ");
+                                printError(strerror(errno),0);
+                                printError("\n",0);
+                                return -1;
+                            }
                         }else std::cout.write((char*)&buf[i],1);
                     }
                     if (rawfile)
@@ -571,17 +633,21 @@ int main(int argc, char* argv[])
                     }else std::cout << std::flush;
                 }
                 CloseHandle(hDisk);
-                if (logLevel > 2){
-                    char s[20];
-                    itoa(rRead,s,10);
+                if (logLevel > 2)
+                {
+                    char s[MAX_PATH] = {0};
+                    sprintf(s,"INFO: %llu bytes transfered\n",rRead);
                     printError(s);
-                    printError(" bytes transfered\n",0);}
+                }
             }
             backupComponents->Release();
         }
         else
         {
-            printError("Error! Can not acces Vssapi.dll::CreateVssBackupComponentsInternal()\n");
+            printError("ERROR: Can not acces Vssapi.dll::CreateVssBackupComponentsInternal() ");
+            char s[MAX_PATH] = {0};
+            if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+            printError("\n",0);
             return -1;
         }
         FreeLibrary(vssapidll);
@@ -589,7 +655,10 @@ int main(int argc, char* argv[])
     }
     else
     {
-        printError("Error! Vssapi.dll can not load.\n");
+        printError("ERROR: Vssapi.dll can not load. ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
+        printError("\n",0);
         return -1;
     }
     return 0;
