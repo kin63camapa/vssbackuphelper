@@ -15,7 +15,7 @@ typedef HRESULT (_stdcall *CoInitialize___)(LPVOID);
 typedef HRESULT (_stdcall *CVBC)(IVssBackupComponents**);
 typedef HRESULT (_stdcall *NtDeviceIoControlFile___)(HANDLE,HANDLE,PIO_APC_ROUTINE,PVOID,PIO_STATUS_BLOCK,ULONG,PVOID,ULONG,PVOID,ULONG);
 
-#define PROGVER "VSSBackupHelper version 0.0.0.1pa\n"
+#define PROGVER "VSSBackupHelper version 0.0.0.1pa2\n"
 #define LOGFILE "./vssadmin.log"
 extern bool logMode = false;
 extern bool rawMode = false;
@@ -46,36 +46,46 @@ void printError(char * error,bool timestamp = logMode)
 void printhelp(char *cmd,bool err = false,char error[] = "\n\nERROR PARSING OPTIONS!")
 {
     char m[] = " [D:\\] [-option] [VALUE]\n"
-               "where D:\\ - destination volume (default C:\\) this argument must be first or not specified!\n\n"
-               "Options:            Values:\n"
-               "-h|-help            Show this help.\n\n"
-               "-v|-ver|-version    Show version. !WARNINIG -v is NOT be verbose! Use -log-level 2|3|4 for debug out.\n\n"
-            "-t|-type            FULL(dafault)|INCREMENTAL|DIFFERENTIAL|LOG|COPY\n"
-            "                    Processing a shadow copy with the specified type.\n"
-            "\n"
-            "-c|-context         BACKUP|FILE_SHARE_BACKUP|NAS_ROLLBACK|APP_ROLLBACK|CLIENT_ACCESSIBLE(dafault)\n"
-            "                    |CLIENT_ACCESSIBLE_WRITERS Processing a shadow copy with the specified context.\n"
-            "\n"
-            "-d|-dry-run         analog -context FILE_SHARE_BACKUP, This option has no values. Incompatible with -context.\n"
-            "\n"
-            "-component-mode     Processing a shadow copy in component mode. This option has no values.\n"
-            "\n"
-            "-l|-log             With no value - do not use error stream for error messages, write it to log file.\n"
-            "                    [<PATH>] - save log to specified log file (default path is ./vssadmin.log).\n"
-            "\n"
-            "-log-level          error|warn|info|debug or 1-4 level of logging. Default value is \"error\" aka 1.\n"
-            "\n"
-            "-raw                Take out to the output stream the contents of the shadow copy instead of the device line\n"
-            "                    [<PATH>] - save raw out (image) to the specified file.\n"
-            "\n"
-            //"-r|-remove-old      Remove all shadow copies for the destination volume (exclude current)\n"
-            //"                    after the snapshot was successfully created. This option has no values.\n"
-            //"\n"
-            //"-s|-services        With no value - Try to start windows vss services befor backup.\n"
-            //"                    force-start|force - Try to start windows vss services befor backup, even if the service is disabled.\n"
-            //"\n"
-
-
+"where D:\\ - destination volume (default C:\\) this argument must be first or"
+"not specified!\n\n"
+"Options:            Values:\n"
+"-h|-help            Show this help and exit.\n\n"
+"-v|-ver|-version    Show version and exit. !WARNINIG -v is NOT be verbose!\n"
+"                    Use -log-level 2|3|4 for debug out.\n\n"
+"-t|-type            FULL(default)|INCREMENTAL|DIFFERENTIAL|LOG|COPY\n"
+"                    Processing a shadow copy with the specified type.\n"
+"\n"
+"-c|-context         BACKUP|FILE_SHARE_BACKUP|NAS_ROLLBACK|APP_ROLLBACK|\n"
+"                    CLIENT_ACCESSIBLE(default)|CLIENT_ACCESSIBLE_WRITERS\n"
+"                    Processing a shadow copy with the specified context.\n"
+"\n"
+"-d|-dry-run         analog -context FILE_SHARE_BACKUP, This option has no\n"
+"                    values. Incompatible with -context.\n"
+"\n"
+"-component-mode     Processing a shadow copy in component mode. This option has\n"
+"                    no values.\n"
+"\n"
+"-l|-log             With no value - do not use error stream for error messages,\n"
+"                    write it to log file.\n"
+"                    [<PATH>] - save log to specified log file (default path is \n"
+"                    ./vssadmin.log).\n"
+"\n"
+"-log-level          error|warn|info|debug or 1-4 level of logging. Default value\n"
+"                    is \"error\" aka 1.\n"
+"\n"
+"-raw                Take out to the output stream the contents of the shadow\n"
+"                    copy instead of the device line\n"
+"                    [<PATH>] - save raw out (image) to the specified file.\n"
+"\n"
+//"-r|-remove-old      Remove all shadow copies for the destination volume (exclude\n"
+//"                    current) after the snapshot was successfully created. This\n"
+//"                    option has no values.\n"
+//"\n"
+//"-s|-services        With no value - Try to start windows vss services befor\n"
+//"                    backup.\n"
+//"                    force-start|force - Try to start windows vss services befor\n"
+//"                    backup, even if the service is disabled.\n"
+//"\n"
             ;
     if (err) std::cerr<<error<<"\nUsage: "<<cmd<<m;
     else std::cout<<"This program makes a shadow copy of the specified volume and returns the device's string for the shadow copy.\nUsage: "<<cmd<<m;
@@ -116,7 +126,7 @@ int main(int argc, char* argv[])
         {
             parsedOpts++;
             std::cout << PROGVER;
-            //return 0;
+            return 0;
         }
         else if (strlen(argv[1])==3)
         {
@@ -167,7 +177,7 @@ int main(int argc, char* argv[])
 
                 if ((argc > i+1) && (argv[i+1][0] != '-'))
                 {
-                    if (argv[i+1] == "force-start"||argv[i+1] == "force")
+                    if (!strcmp(argv[i+1],"force-start")||!strcmp(argv[i+1],"force"))
                     {
                         parsedOpts++;
                         serviceForce = true;
@@ -179,27 +189,27 @@ int main(int argc, char* argv[])
                 parsedOpts++;
                 if ((argc > i+1) && (argv[i+1][0] != '-'))
                 {
-                    if (argv[i+1] == "FULL")
+                    if (!strcmp(argv[i+1],"FULL"))
                     {
                         parsedOpts++;
                         bkpType = VSS_BT_FULL;
                     }
-                    if (argv[i+1] == "INCREMENTAL")
+                    if (!strcmp(argv[i+1],"INCREMENTAL"))
                     {
                         parsedOpts++;
                         bkpType = VSS_BT_INCREMENTAL;
                     }
-                    if (argv[i+1] == "DIFFERENTIAL")
+                    if (!strcmp(argv[i+1],"DIFFERENTIAL"))
                     {
                         parsedOpts++;
                         bkpType = VSS_BT_DIFFERENTIAL;
                     }
-                    if (argv[i+1] == "LOG")
+                    if (!strcmp(argv[i+1],"LOG"))
                     {
                         parsedOpts++;
                         bkpType = VSS_BT_LOG;
                     }
-                    if (argv[i+1] == "COPY")
+                    if (!strcmp(argv[i+1],"COPY"))
                     {
                         parsedOpts++;
                         bkpType = VSS_BT_COPY;
@@ -211,32 +221,32 @@ int main(int argc, char* argv[])
                 parsedOpts++;
                 if ((argc > i+1) && (argv[i+1][0] != '-'))
                 {
-                    if (argv[i+1] == "BACKUP")
+                    if (!strcmp(argv[i+1],"BACKUP"))
                     {
                         parsedOpts++;
                         bkpContext = VSS_CTX_BACKUP;
                     }
-                    if (argv[i+1] == "FILE_SHARE_BACKUP")
+                    if (!strcmp(argv[i+1],"FILE_SHARE_BACKUP"))
                     {
                         parsedOpts++;
                         bkpContext = VSS_CTX_FILE_SHARE_BACKUP;
                     }
-                    if (argv[i+1] == "NAS_ROLLBACK")
+                    if (!strcmp(argv[i+1],"NAS_ROLLBACK"))
                     {
                         parsedOpts++;
                         bkpContext = VSS_CTX_NAS_ROLLBACK;
                     }
-                    if (argv[i+1] == "APP_ROLLBACK")
+                    if (!strcmp(argv[i+1],"APP_ROLLBACK"))
                     {
                         parsedOpts++;
                         bkpContext = VSS_CTX_APP_ROLLBACK;
                     }
-                    if (argv[i+1] == "CLIENT_ACCESSIBLE")
+                    if (!strcmp(argv[i+1],"CLIENT_ACCESSIBLE"))
                     {
                         parsedOpts++;
                         bkpContext = VSS_CTX_CLIENT_ACCESSIBLE;
                     }
-                    if (argv[i+1] == "CLIENT_ACCESSIBLE_WRITERS")
+                    if (!strcmp(argv[i+1],"CLIENT_ACCESSIBLE_WRITERS"))
                     {
                         parsedOpts++;
                         bkpContext = VSS_CTX_CLIENT_ACCESSIBLE_WRITERS;
@@ -291,7 +301,7 @@ int main(int argc, char* argv[])
         if (!logfileopentest)
         {
             char *err = new char[28+strlen(logfile)+strlen(strerror(log.error))];
-            strcpy(err,"Can not open the log file: ");
+            strcpy(err,"ERROR: Can not open the log file: ");
             strcat(err,logfile);
             strcat(err," ");
             strcat(err,strerror(log.error));
@@ -300,7 +310,11 @@ int main(int argc, char* argv[])
         }
     }
     if (parsedOpts != argc-1){printhelp(argv[0],1);return 1;}
-    if (logLevel > 3) printError("End parsing options.\n");
+    if (logLevel > 3)
+    {
+        printError("DEBUG: End parsing options. Starting ");
+        printError(PROGVER"\n",0);
+    }
     TCHAR vol[] = {drive,':','\\','\0'};
     HMODULE ole32dll = LoadLibrary(TEXT("ole32.dll"));
     if (!ole32dll)
@@ -311,23 +325,25 @@ int main(int argc, char* argv[])
         printError("\n",0);
         return -1;
     }
+    if (logLevel > 3) printError("DEBUG: ole32.dll was successfully opened.\n");
     HRESULT result;
     HMODULE vssapidll = LoadLibrary(TEXT("Vssapi.dll"));
     if (vssapidll)
     {
+        if (logLevel > 3) printError("DEBUG: Vssapi.dll was successfully opened.\n");
         IVssBackupComponents *backupComponents;
         CVBC cvbc = (CVBC)GetProcAddress(vssapidll, "CreateVssBackupComponentsInternal");
         if(!cvbc)
         {
-            if (logLevel > 1){printError("Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z\n");}
+            if (logLevel > 1){printError("DEBUG: Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z\n");}
             cvbc = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z");
             if (!cvbc)
             {
-                if (logLevel > 1){printError("Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z\n");}
+                if (logLevel > 1){printError("DEBUG: Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z\n");}
                 cvbc  = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z");
                 if (!cvbc)
                 {
-                    printError("Error get API CreateVssBackupComponents. ");
+                    printError("ERROR: Can not get API CreateVssBackupComponents. ");
                     char s[MAX_PATH] = {0};
                     if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
                     printError("\n",0);
@@ -336,7 +352,7 @@ int main(int argc, char* argv[])
             }
             xp = true;
             //temp
-            printError("Windows XP or 2003 is not supported in this version.\n");
+            printError("ERROR: Windows XP or 2003 is not supported in this version.\n");
             return 0;
         }
         CoInitialize___ CoInitialize = (CoInitialize___)GetProcAddress(ole32dll, "CoInitialize");
@@ -348,6 +364,7 @@ int main(int argc, char* argv[])
             printError("\n",0);
             return -1;
         }
+        if (logLevel > 3) printError("DEBUG: CoInitialize api from ole32.dll was successfully loaded.\n");
         if (!SUCCEEDED(result = (CoInitialize)(0)))
         {
             printError("Error call ole32.dll::CoInitialize()! ");
@@ -364,13 +381,16 @@ int main(int argc, char* argv[])
             printError("\n",0);
             return -1;
         }
+        if (logLevel > 3) printError("DEBUG: CoInitialize api from ole32.dll was successfully executed.\n");
         if (cvbc)
         {
+            if (logLevel > 3) printError("DEBUG: CreateVssBackupComponents api from vssapi.dll was successfully loaded.\n");
             if (!SUCCEEDED((cvbc)(&backupComponents)))
             {
-                printError("Error in CreateVssBackupComponents! Are u Administrator?\n");
+                printError("ERROR: Can not execute CreateVssBackupComponents! Are u Administrator?\n");
                 return -1;
             }
+            if (logLevel > 3) printError("DEBUG: CreateVssBackupComponents api from vssapi.dll was successfully executed.\n");
             VSS_ID snapshotSetId;
             if (!SUCCEEDED(result = backupComponents->InitializeForBackup()))
             {
@@ -389,12 +409,14 @@ int main(int argc, char* argv[])
                 printError("\n",0);
                 return -1;
             }
-            if (logLevel > 1&&drive == 'C')printError("Bootable system state is being performed.\n");
+            if (logLevel > 3) printError("DEBUG: InitializeForBackup() was successfully executed.\n");
+            if (logLevel > 1&&drive == 'C')printError("WARNING: Bootable system state is being performed.\n");
             if (!SUCCEEDED(backupComponents->SetBackupState(compMode, drive == 'C', bkpType)))
             {
-                printError("Error in backupComponents->SetBackupState!\n");
+                printError("ERROR: Error in backupComponents->SetBackupState!\n");
                 return -1;
             }
+            if (logLevel > 3) printError("DEBUG: SetBackupState() was successfully executed.\n");
             if (!xp){
                 if (!SUCCEEDED(backupComponents->SetContext(bkpContext)))
                 {
@@ -412,7 +434,9 @@ int main(int argc, char* argv[])
                             }
                         }
                     }
-                }}
+                }
+            }
+            if (logLevel > 3) printError("DEBUG: SetContext() was successfully executed.\n");
             VSS_ID snapshotId;
             if (!SUCCEEDED(result = backupComponents->StartSnapshotSet(&snapshotSetId)))
             {
@@ -424,6 +448,7 @@ int main(int argc, char* argv[])
                 printError("\n",0);
                 return -1;
             }
+            if (logLevel > 3) printError("DEBUG: StartSnapshotSet() was successfully executed.\n");
             if (!SUCCEEDED(result = backupComponents->AddToSnapshotSet(vol, GUID_NULL, &snapshotId)))
             {
 
@@ -461,6 +486,7 @@ int main(int argc, char* argv[])
                 printError("\n",0);
                 return -1;
             }
+            if (logLevel > 3) printError("DEBUG: AddToSnapshotSet() was successfully executed.\n");
             IVssAsync *async;
             if (!SUCCEEDED(result = backupComponents->DoSnapshotSet(&async)))
             {
@@ -497,6 +523,7 @@ int main(int argc, char* argv[])
                 printError("\n",0);//*/
                 return -1;
             }
+            if (logLevel > 3) printError("DEBUG: DoSnapshotSet() was successfully executed.\n");
             result = async->Wait();
             async->Release();
 
@@ -508,6 +535,7 @@ int main(int argc, char* argv[])
                 printError("\n",0);
                 return -1;
             }
+            if (logLevel > 3) printError("DEBUG: async->Wait() was successfully executed.\n");
             VSS_SNAPSHOT_PROP prop;
             result = backupComponents->GetSnapshotProperties(snapshotId, &prop);
             if (!SUCCEEDED(result))
@@ -531,7 +559,7 @@ int main(int argc, char* argv[])
             if (!rawMode) std::wcout << prop.m_pwszSnapshotDeviceObject << "\n";
             else
             {
-
+                if (logLevel > 3) printError("DEBUG: Prepare to raw mode.\n");
                 std::ofstream rfile;
                 DWORD nRead;
                 unsigned long long rRead = 0;
@@ -552,6 +580,12 @@ int main(int argc, char* argv[])
                     printError("\n",0);
                     return -1;
                 }
+                if (logLevel > 3)
+                {
+                    char str[MAX_PATH*2] = {0};
+                    sprintf(str,"DEBUG: Source disk size detected us %llu bytes.\n",DiskSize);
+                    printError(str);
+                }
                 HANDLE hDisk = CreateFile(prop.m_pwszSnapshotDeviceObject,
                                           GENERIC_READ, FILE_SHARE_READ,
                                           NULL, OPEN_EXISTING, 0, NULL);
@@ -563,6 +597,7 @@ int main(int argc, char* argv[])
                     printError("\n",0);
                     return -1;
                 }
+                if (logLevel > 3) printError("DEBUG: The snapshot device object was successfully opened.\n");
                 if (rawfile)
                 {
                     rfile.open(rawfile,std::ios_base::binary);
@@ -575,7 +610,10 @@ int main(int argc, char* argv[])
                         printError("\n",0);
                         return -1;
                     }
+                    if (logLevel > 3) printError("DEBUG: The output file was successfully opened\n");
+
                 }
+                if (logLevel > 3) printError("DEBUG: Try to start transfer.\n");
                 for (ULONGLONG i = DiskSize;i >= buffSize;i=i-buffSize)
                 {
                     ReadFile(hDisk, buf, buffSize, &nRead, NULL);
@@ -606,8 +644,10 @@ int main(int argc, char* argv[])
                 }
                 int dot = 0;//for debug
                 dot++;
+
                 if (rRead < DiskSize)
                 {
+                    if (logLevel > 3) printError("DEBUG: Tail smaller 4096 bytes detected. Writing it in byte mode.\n");
                     ReadFile(hDisk, buf, (DWORD)(DiskSize - rRead), &nRead, NULL);
                     rRead = rRead+nRead;
                     for (unsigned int i=0;i < nRead;i++)
@@ -626,6 +666,7 @@ int main(int argc, char* argv[])
                             }
                         }else std::cout.write((char*)&buf[i],1);
                     }
+                    if (logLevel > 3) printError("DEBUG: Transfer comleted, close files.\n");
                     if (rawfile)
                     {
                         rfile << std::flush;
@@ -661,5 +702,6 @@ int main(int argc, char* argv[])
         printError("\n",0);
         return -1;
     }
+    if (logLevel > 3) printError("DEBUG: All operations comleated, goodbye!\n");
     return 0;
 }
