@@ -6,6 +6,7 @@ IDI_ICON1               ICON    DISCARDABLE     "Drive-Backup.ico"
 # include <winver.h>
 # endif
 #endif
+#include "options.h"
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,0,0,1
  PRODUCTVERSION 0,0,0,1
@@ -30,7 +31,7 @@ BEGIN
  VALUE "LegalCopyright", "kin63camapa совместно с ООО ""СмартТех""\0"
  VALUE "OriginalFilename", "vssbackuphelper32.exe\0"
  VALUE "ProductName", "VSSBackupHelper\0"
- VALUE "ProductVersion", "0.0.0.1pa2\0"
+ VALUE "ProductVersion", PRODVER "\0"
  VALUE "LegalTrademarks",    "VSSBackupHelper, ООО ""СмартТех""\0"
  VALUE "PrivateBuild",       "amd64\0"
  VALUE "Builder",            "kin63camapa\0"

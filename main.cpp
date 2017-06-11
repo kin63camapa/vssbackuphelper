@@ -1,707 +1,414 @@
-#include <windows.h>
 #include <iostream>
+#include <windows.h>
+#include <Winternl.h>
 #include <vss.h>
 #include <vswriter.h>
 #include <vsbackup.h>
-#include <objbase.h>
-#include <cstring>
-#include <string.h>
-#include <ctime>
-#include <WinIoCtl.h>
-#include <Winternl.h>
 #include "log.h"
+#include "options.h"
 
 typedef HRESULT (_stdcall *CoInitialize___)(LPVOID);
 typedef HRESULT (_stdcall *CVBC)(IVssBackupComponents**);
 typedef HRESULT (_stdcall *NtDeviceIoControlFile___)(HANDLE,HANDLE,PIO_APC_ROUTINE,PVOID,PIO_STATUS_BLOCK,ULONG,PVOID,ULONG,PVOID,ULONG);
 
-#define PROGVER "VSSBackupHelper version 0.0.0.1pa2\n"
-#define LOGFILE "./vssadmin.log"
-extern bool logMode = false;
-extern bool rawMode = false;
-extern bool compMode = false;
-extern bool serviceMode = false;
-extern bool serviceForce = false;
-extern bool removeOld = false;
-extern LOG log;
-extern unsigned char logLevel = 1;
-extern _VSS_BACKUP_TYPE bkpType = VSS_BT_FULL;
-extern _VSS_SNAPSHOT_CONTEXT bkpContext = VSS_CTX_CLIENT_ACCESSIBLE;
-
-
-
-void printError(char * error,bool timestamp = logMode)
-{
-    const time_t ctt = time(0);
-    char*tm;
-    if (timestamp){
-        tm = asctime(localtime(&ctt));
-        tm[strlen(tm)-1] = ' ';
-    }
-    else tm = "";
-    if (logMode) log.logfile << tm << error;
-    else std::cerr << tm << error;
-}
-
-void printhelp(char *cmd,bool err = false,char error[] = "\n\nERROR PARSING OPTIONS!")
-{
-    char m[] = " [D:\\] [-option] [VALUE]\n"
-"where D:\\ - destination volume (default C:\\) this argument must be first or"
-"not specified!\n\n"
-"Options:            Values:\n"
-"-h|-help            Show this help and exit.\n\n"
-"-v|-ver|-version    Show version and exit. !WARNINIG -v is NOT be verbose!\n"
-"                    Use -log-level 2|3|4 for debug out.\n\n"
-"-t|-type            FULL(default)|INCREMENTAL|DIFFERENTIAL|LOG|COPY\n"
-"                    Processing a shadow copy with the specified type.\n"
-"\n"
-"-c|-context         BACKUP|FILE_SHARE_BACKUP|NAS_ROLLBACK|APP_ROLLBACK|\n"
-"                    CLIENT_ACCESSIBLE(default)|CLIENT_ACCESSIBLE_WRITERS\n"
-"                    Processing a shadow copy with the specified context.\n"
-"\n"
-"-d|-dry-run         analog -context FILE_SHARE_BACKUP, This option has no\n"
-"                    values. Incompatible with -context.\n"
-"\n"
-"-component-mode     Processing a shadow copy in component mode. This option has\n"
-"                    no values.\n"
-"\n"
-"-l|-log             With no value - do not use error stream for error messages,\n"
-"                    write it to log file.\n"
-"                    [<PATH>] - save log to specified log file (default path is \n"
-"                    ./vssadmin.log).\n"
-"\n"
-"-log-level          error|warn|info|debug or 1-4 level of logging. Default value\n"
-"                    is \"error\" aka 1.\n"
-"\n"
-"-raw                Take out to the output stream the contents of the shadow\n"
-"                    copy instead of the device line\n"
-"                    [<PATH>] - save raw out (image) to the specified file.\n"
-"\n"
-//"-r|-remove-old      Remove all shadow copies for the destination volume (exclude\n"
-//"                    current) after the snapshot was successfully created. This\n"
-//"                    option has no values.\n"
-//"\n"
-//"-s|-services        With no value - Try to start windows vss services befor\n"
-//"                    backup.\n"
-//"                    force-start|force - Try to start windows vss services befor\n"
-//"                    backup, even if the service is disabled.\n"
-//"\n"
-            ;
-    if (err) std::cerr<<error<<"\nUsage: "<<cmd<<m;
-    else std::cout<<"This program makes a shadow copy of the specified volume and returns the device's string for the shadow copy.\nUsage: "<<cmd<<m;
-}
-
 LOG log;
 
 int main(int argc, char* argv[])
 {
-    char drive = 'C';
-    char *logfile = NULL;
-    char *rawfile = NULL;
     bool xp = false;
-    int parsedOpts = NULL;
-    logLevel = 1;
-
-    if (argc >= 2)
-    {
-        if (!strcmp(argv[1],"--help")
-                ||!strcmp(argv[1],"-help")
-                ||!strcmp(argv[1],"--h")
-                ||!strcmp(argv[1],"-h")
-                ||!strcmp(argv[1],"/?")
-                ||!strcmp(argv[1],"-H")
-                )
-        {
-            parsedOpts++;
-            printhelp(argv[0]);
-            return 0;
-        }
-        else if (!strcmp(argv[1],"--version")
-                 ||!strcmp(argv[1],"-version")
-                 ||!strcmp(argv[1],"--v")
-                 ||!strcmp(argv[1],"-v")
-                 ||!strcmp(argv[1],"-ver")
-                 ||!strcmp(argv[1],"--ver")
-                 )
-        {
-            parsedOpts++;
-            std::cout << PROGVER;
-            return 0;
-        }
-        else if (strlen(argv[1])==3)
-        {
-            if(argv[1][1]==':'&&argv[1][2]=='\\')
-            {
-                char L=argv[1][0];//for simpe read code only
-                if (L>'A'&&L<'Z'||L>'a'&&L<'z')
-                {
-                    drive = L;
-                    parsedOpts++;
-                }
-            }
-        }
-        for (int i = 1;i < argc;i++)
-        {
-            if (!strcmp(argv[i],"-log-level"))
-            {
-                parsedOpts++;
-                i++;
-                if ((argc > i) && (argv[i][0] != '-'))
-                {
-                    if (!strcmp(argv[i],"error")||!strcmp(argv[i],"1"))
-                    {
-                        parsedOpts++;
-                        logLevel = 1;
-                    }
-                    if (!strcmp(argv[i],"warn")||!strcmp(argv[i],"2"))
-                    {
-                        parsedOpts++;
-                        logLevel = 2;
-                    }
-                    if (!strcmp(argv[i],"info")||!strcmp(argv[i],"3"))
-                    {
-                        parsedOpts++;
-                        logLevel = 3;
-                    }
-                    if (!strcmp(argv[i],"debug")||!strcmp(argv[i],"4"))
-                    {
-                        parsedOpts++;
-                        logLevel = 4;
-                    }
-                }
-            }
-            if (!strcmp(argv[i],"-services")||!strcmp(argv[i],"-s"))
-            {
-                parsedOpts++;
-                serviceMode = true;
-
-                if ((argc > i+1) && (argv[i+1][0] != '-'))
-                {
-                    if (!strcmp(argv[i+1],"force-start")||!strcmp(argv[i+1],"force"))
-                    {
-                        parsedOpts++;
-                        serviceForce = true;
-                    }
-                }
-            }
-            if (!strcmp(argv[i],"-type")||!strcmp(argv[i],"-t"))
-            {
-                parsedOpts++;
-                if ((argc > i+1) && (argv[i+1][0] != '-'))
-                {
-                    if (!strcmp(argv[i+1],"FULL"))
-                    {
-                        parsedOpts++;
-                        bkpType = VSS_BT_FULL;
-                    }
-                    if (!strcmp(argv[i+1],"INCREMENTAL"))
-                    {
-                        parsedOpts++;
-                        bkpType = VSS_BT_INCREMENTAL;
-                    }
-                    if (!strcmp(argv[i+1],"DIFFERENTIAL"))
-                    {
-                        parsedOpts++;
-                        bkpType = VSS_BT_DIFFERENTIAL;
-                    }
-                    if (!strcmp(argv[i+1],"LOG"))
-                    {
-                        parsedOpts++;
-                        bkpType = VSS_BT_LOG;
-                    }
-                    if (!strcmp(argv[i+1],"COPY"))
-                    {
-                        parsedOpts++;
-                        bkpType = VSS_BT_COPY;
-                    }
-                }
-            }
-            if (!strcmp(argv[i],"-context")||!strcmp(argv[i],"-c"))
-            {
-                parsedOpts++;
-                if ((argc > i+1) && (argv[i+1][0] != '-'))
-                {
-                    if (!strcmp(argv[i+1],"BACKUP"))
-                    {
-                        parsedOpts++;
-                        bkpContext = VSS_CTX_BACKUP;
-                    }
-                    if (!strcmp(argv[i+1],"FILE_SHARE_BACKUP"))
-                    {
-                        parsedOpts++;
-                        bkpContext = VSS_CTX_FILE_SHARE_BACKUP;
-                    }
-                    if (!strcmp(argv[i+1],"NAS_ROLLBACK"))
-                    {
-                        parsedOpts++;
-                        bkpContext = VSS_CTX_NAS_ROLLBACK;
-                    }
-                    if (!strcmp(argv[i+1],"APP_ROLLBACK"))
-                    {
-                        parsedOpts++;
-                        bkpContext = VSS_CTX_APP_ROLLBACK;
-                    }
-                    if (!strcmp(argv[i+1],"CLIENT_ACCESSIBLE"))
-                    {
-                        parsedOpts++;
-                        bkpContext = VSS_CTX_CLIENT_ACCESSIBLE;
-                    }
-                    if (!strcmp(argv[i+1],"CLIENT_ACCESSIBLE_WRITERS"))
-                    {
-                        parsedOpts++;
-                        bkpContext = VSS_CTX_CLIENT_ACCESSIBLE_WRITERS;
-                    }
-                }
-            }
-            if (!strcmp(argv[i],"-dry-run")||!strcmp(argv[i],"-d"))
-            {
-                parsedOpts++;
-                bkpContext = VSS_CTX_FILE_SHARE_BACKUP;
-
-            }
-            if (!strcmp(argv[i],"-log")||!strcmp(argv[i],"-l"))
-            {
-                logMode = true;
-                parsedOpts++;
-                if ((argc > i+1) && (argv[i+1][0] != '-'))
-                {
-                    logfile = new char[]=argv[i+1];
-                    i++;
-                    parsedOpts++;
-                }else{logfile = new char[]=LOGFILE;}
-            }
-            if (!strcmp(argv[i],"-remove-old")||!strcmp(argv[i],"-r"))
-            {
-                removeOld = true;
-                parsedOpts++;
-            }
-            if (!strcmp(argv[i],"-raw"))
-            {
-                rawMode = true;
-                parsedOpts++;
-                if ((argc > i+1) && (argv[i+1][0] != '-'))
-                {
-                    rawfile = new char[]=argv[i+1];
-                    i++;
-                    parsedOpts++;
-                }
-            }
-            if (!strcmp(argv[i],"-component-mode"))
-            {
-                compMode = true;
-                parsedOpts++;
-            }
-        }
-        //printhelp(argv[0],1);return 1;
-    }
-    if (logMode && !logfile) logfile = new char[]=LOGFILE;
-    if (logMode)// && !log.LogFileOpen(logfile))
-    {
-        bool logfileopentest = log.LogFileOpen(logfile);
-        if (!logfileopentest)
-        {
-            char *err = new char[28+strlen(logfile)+strlen(strerror(log.error))];
-            strcpy(err,"ERROR: Can not open the log file: ");
-            strcat(err,logfile);
-            strcat(err," ");
-            strcat(err,strerror(log.error));
-            printhelp(argv[0],1,err);
-            return 1;
-        }
-    }
-    if (parsedOpts != argc-1){printhelp(argv[0],1);return 1;}
+    if (!parseOptions(argc,argv))return 9;
     if (logLevel > 3)
     {
-        printError("DEBUG: End parsing options. Starting ");
-        printError(PROGVER"\n",0);
+        log.printError("DEBUG: End parsing options. Starting ");
+        log.printError(PROGVER,0);
     }
-    TCHAR vol[] = {drive,':','\\','\0'};
     HMODULE ole32dll = LoadLibrary(TEXT("ole32.dll"));
     if (!ole32dll)
     {
-        printError("Error! ole32.dll can not load. ");
+        log.printError("Error! ole32.dll can not load. ");
         char s[MAX_PATH] = {0};
-        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-        printError("\n",0);
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
         return -1;
     }
-    if (logLevel > 3) printError("DEBUG: ole32.dll was successfully opened.\n");
-    HRESULT result;
+    if (logLevel > 3) log.printError("DEBUG: ole32.dll was successfully opened.\n");
     HMODULE vssapidll = LoadLibrary(TEXT("Vssapi.dll"));
-    if (vssapidll)
+    if (!vssapidll)
     {
-        if (logLevel > 3) printError("DEBUG: Vssapi.dll was successfully opened.\n");
-        IVssBackupComponents *backupComponents;
-        CVBC cvbc = (CVBC)GetProcAddress(vssapidll, "CreateVssBackupComponentsInternal");
-        if(!cvbc)
+        log.printError("ERROR: Vssapi.dll can not load. ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: Vssapi.dll was successfully opened.\n");
+    HRESULT result;
+    IVssBackupComponents *backupComponents;
+    CVBC cvbc = (CVBC)GetProcAddress(vssapidll, "CreateVssBackupComponentsInternal");
+    if(!cvbc)
+    {
+        if (logLevel > 1){log.printError("WARNING: Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z\n");}
+        cvbc = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z");
+        if (!cvbc)
         {
-            if (logLevel > 1){printError("DEBUG: Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z\n");}
-            cvbc = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YGJPAPAVIVssBackupComponents@@@Z");
+            if (logLevel > 1){log.printError("WARNING: Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z\n");}
+            cvbc  = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z");
             if (!cvbc)
             {
-                if (logLevel > 1){printError("DEBUG: Error get API CreateVssBackupComponents. try to ?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z\n");}
-                cvbc  = (CVBC)GetProcAddress(vssapidll, "?CreateVssBackupComponents@@YAJPEAPEAVIVssBackupComponents@@@Z");
-                if (!cvbc)
-                {
-                    printError("ERROR: Can not get API CreateVssBackupComponents. ");
-                    char s[MAX_PATH] = {0};
-                    if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-                    printError("\n",0);
-                    return 1;
-                }
-            }
-            xp = true;
-            //temp
-            printError("ERROR: Windows XP or 2003 is not supported in this version.\n");
-            return 0;
-        }
-        CoInitialize___ CoInitialize = (CoInitialize___)GetProcAddress(ole32dll, "CoInitialize");
-        if (!CoInitialize)
-        {
-            printError("Error! Can not acces ole32.dll::CoInitialize()\n");
-            char s[MAX_PATH] = {0};
-            if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-            printError("\n",0);
-            return -1;
-        }
-        if (logLevel > 3) printError("DEBUG: CoInitialize api from ole32.dll was successfully loaded.\n");
-        if (!SUCCEEDED(result = (CoInitialize)(0)))
-        {
-            printError("Error call ole32.dll::CoInitialize()! ");
-            if (result == S_FALSE)
-                printError("The COM library is already initialized on this thread.");
-            if (result == RPC_E_CHANGED_MODE)
-                printError("A previous call to CoInitializeEx specified the concurrency model for this thread as multithread apartment (MTA). This could also indicate that a change from neutral-threaded apartment to single-threaded apartment has occurred.");
-            if (result == E_ACCESSDENIED)
-                printError("CoInitialize caller does not have sufficient privileges or is not an administrator.");
-            if (result == E_OUTOFMEMORY)
-                printError("CoInitialize caller is out of memory or other system resources.");
-            if (result == E_INVALIDARG)
-                printError("CoInitialize parameter is incorrect.");
-            printError("\n",0);
-            return -1;
-        }
-        if (logLevel > 3) printError("DEBUG: CoInitialize api from ole32.dll was successfully executed.\n");
-        if (cvbc)
-        {
-            if (logLevel > 3) printError("DEBUG: CreateVssBackupComponents api from vssapi.dll was successfully loaded.\n");
-            if (!SUCCEEDED((cvbc)(&backupComponents)))
-            {
-                printError("ERROR: Can not execute CreateVssBackupComponents! Are u Administrator?\n");
-                return -1;
-            }
-            if (logLevel > 3) printError("DEBUG: CreateVssBackupComponents api from vssapi.dll was successfully executed.\n");
-            VSS_ID snapshotSetId;
-            if (!SUCCEEDED(result = backupComponents->InitializeForBackup()))
-            {
-                printError("Error in InitializeForBackup(), are u running native achitecture (x86 of x64)?\n");
-                if (result == S_OK) printError("Successfully initialized the specified document for backup.");
-                if (result == E_ACCESSDENIED)
-                    printError("The caller does not have sufficient backup privileges or is not an administrator.");
-                if (result == E_OUTOFMEMORY)
-                    printError("The caller is out of memory or other system resources.");
-                if (result == VSS_E_BAD_STATE)
-                    printError("The backup components object is not initialized, this method has been called during a restore operation, or this method has not been called within the correct sequence.");
-                if (result == VSS_E_INVALID_XML_DOCUMENT)
-                    printError("The XML document is not valid. Check the event log for details. For more information, see Event and Error Handling Under VSS.");
-                /*if (result == VSS_E_UNEXPECTED)
-                printError("Unexpected error. The error code is logged in the error log file. For more information, see Event and Error Handling Under VSS.");*/
-                printError("\n",0);
-                return -1;
-            }
-            if (logLevel > 3) printError("DEBUG: InitializeForBackup() was successfully executed.\n");
-            if (logLevel > 1&&drive == 'C')printError("WARNING: Bootable system state is being performed.\n");
-            if (!SUCCEEDED(backupComponents->SetBackupState(compMode, drive == 'C', bkpType)))
-            {
-                printError("ERROR: Error in backupComponents->SetBackupState!\n");
-                return -1;
-            }
-            if (logLevel > 3) printError("DEBUG: SetBackupState() was successfully executed.\n");
-            if (!xp){
-                if (!SUCCEEDED(backupComponents->SetContext(bkpContext)))
-                {
-                    if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_BACKUP)))
-                    {
-                        if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_CLIENT_ACCESSIBLE_WRITERS)))
-                        {
-                            if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_APP_ROLLBACK)))
-                            {
-                                printError("Error in backupComponents->SetContext! ");
-                                char s[MAX_PATH] = {0};
-                                if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-                                printError("\n",0);
-                                return -1;
-                            }
-                        }
-                    }
-                }
-            }
-            if (logLevel > 3) printError("DEBUG: SetContext() was successfully executed.\n");
-            VSS_ID snapshotId;
-            if (!SUCCEEDED(result = backupComponents->StartSnapshotSet(&snapshotSetId)))
-            {
-                printError("Error in backupComponents->StartSnapshotSet!\n");
-                if (result == E_INVALIDARG)printError("One of the parameter values is not valid.");
-                if (result == VSS_E_SNAPSHOT_SET_IN_PROGRESS)printError("The creation of a shadow copy is in progress, and only one shadow copy creation operation can be in progress at one time. Either wait to try again or return with a failure error code.");
-                if (result == E_OUTOFMEMORY)printError("The caller is out of memory or other system resources.");
-                if (result == VSS_E_BAD_STATE)printError("The backup components object is not initialized, this method has been called during a restore operation, or this method has not been called within the correct sequence.");
-                printError("\n",0);
-                return -1;
-            }
-            if (logLevel > 3) printError("DEBUG: StartSnapshotSet() was successfully executed.\n");
-            if (!SUCCEEDED(result = backupComponents->AddToSnapshotSet(vol, GUID_NULL, &snapshotId)))
-            {
-
-                printError("Error in AddToSnapshotSet()\n");
-                if (result == E_ACCESSDENIED)
-                    printError("The caller does not have sufficient backup privileges or is not an administrator.");
-                if (result == E_INVALIDARG)
-                    printError("One of the parameter values is not valid");
-                if (result == VSS_E_BAD_STATE)
-                    printError("The backup components object is not initialized, this method has been called during a restore operation, or this method has not been called within the correct sequence.");
-                if (result == VSS_E_MAXIMUM_NUMBER_OF_VOLUMES_REACHED)
-                    printError("The maximum number of volumes or remote file shares have been added to the shadow copy set. The specified volume or remote file share was not added to the shadow copy set.");
-                if (result == VSS_E_MAXIMUM_NUMBER_OF_SNAPSHOTS_REACHED)
-                    printError("The volume or remote file share has been added to the maximum number of shadow copy sets. The specified volume or remote file share was not added to the shadow copy set.");
-                if (result == E_OUTOFMEMORY)
-                    printError("The caller is out of memory or other system resources.");
-                if (result == 0x8004232CL)
-                    printError("The specified volume is nested too deeply to participate in the VSS operation. Possible reasons for this error include the following:\n"
-                               "Trying to create a shadow copy of a volume that resides on a VHD that is contained in another VHD.\n"
-                               "Trying to create a shadow copy of a VHD volume when the volume that contains the VHD is also in the same shadow copy set.");
-                if (result == VSS_E_OBJECT_NOT_FOUND)
-                    printError("pwszVolumeName does not correspond to an existing volume or remote file share");
-                if (result == VSS_E_PROVIDER_NOT_REGISTERED)
-                    printError("ProviderId does not correspond to a registered provider.");
-                if (result == VSS_E_PROVIDER_VETO)
-                    printError("Expected provider error. The provider logged the error in the event log. For more information, see Event and Error Handling Under VSS.");
-                if (result == VSS_E_SNAPSHOT_SET_IN_PROGRESS)
-                    printError("Another shadow copy creation is already in progress. Occurs when adding a CSV volume to a snapshot set from multiple nodes at the same time, or while adding a scale out share to the snapshot set from multiple SMB client nodes at the same time.");
-                if (result == VSS_E_VOLUME_NOT_SUPPORTED)
-                    printError("The value of the ProviderId parameter is GUID_NULL and no VSS provider indicates that it supports the specified volume or remote file share.");
-                if (result == VSS_E_VOLUME_NOT_SUPPORTED_BY_PROVIDER)
-                    printError("The volume or remote file share is not supported by the specified provider.");
-                if (result == VSS_E_UNEXPECTED_PROVIDER_ERROR)
-                    printError("The provider returned an unexpected error code. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
-                printError("\n",0);
-                return -1;
-            }
-            if (logLevel > 3) printError("DEBUG: AddToSnapshotSet() was successfully executed.\n");
-            IVssAsync *async;
-            if (!SUCCEEDED(result = backupComponents->DoSnapshotSet(&async)))
-            {
-                printError("Error in backupComponents->DoSnapshotSet!\n");
-                if (result == E_ACCESSDENIED)
-                    printError("The caller does not have sufficient backup privileges or is not an administrator.");
-                if (result == E_INVALIDARG)
-                    printError("ppAsyncdoes not point to a valid pointer; that is, it is NULL.");
-                if (result == E_OUTOFMEMORY)
-                    printError("aThe caller is out of memory or other system resources.");
-                if (result == VSS_E_BAD_STATE)
-                    printError("The backup components object has not been initialized or the prerequisite calls for a given shadow copy context have not been made prior to calling DoSnapshotSet.");
-                if (result == VSS_E_INSUFFICIENT_STORAGE)
-                    printError("The system or provider has insufficient storage space. If possible delete any old or unnecessary persistent shadow copies and try again. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
-                if (result == VSS_E_FLUSH_WRITES_TIMEOUT)
-                    printError("The system was unable to flush I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.");
-                if (result == VSS_E_HOLD_WRITES_TIMEOUT)
-                    printError("The system was unable to hold I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.");
-                if (result == VSS_E_NESTED_VOLUME_LIMIT)
-                    printError("The specified volume is nested too deeply to participate in the VSS operation.");
-                if (result == VSS_E_PROVIDER_VETO)
-                    printError("The provider was unable to perform the request at this time. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. "
-                               "This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
-                if (result == VSS_E_REBOOT_REQUIRED)
-                    printError("The provider encountered an error that requires the user to restart the computer.");
-                if (result == VSS_E_TRANSACTION_FREEZE_TIMEOUT)
-                    printError("The system was unable to freeze the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).");
-                if (result == VSS_E_TRANSACTION_THAW_TIMEOUT)
-                    printError("The system was unable to thaw the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).");
-                if (result == VSS_E_UNEXPECTED)
-                    printError("Unexpected error. The error code is logged in the error log file. For more information, see Event and Error Handling Under VSS.");
-                if (result == VSS_E_UNEXPECTED_PROVIDER_ERROR)
-                    printError("The provider returned an unexpected error code. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
-                printError("\n",0);//*/
-                return -1;
-            }
-            if (logLevel > 3) printError("DEBUG: DoSnapshotSet() was successfully executed.\n");
-            result = async->Wait();
-            async->Release();
-
-            if (!SUCCEEDED(result))
-            {
-                printError("Error wait for snapshot create! ");
+                log.printError("ERROR: Can not get API CreateVssBackupComponents. ");
                 char s[MAX_PATH] = {0};
-                if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-                printError("\n",0);
-                return -1;
+                if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+                log.printError("\n",0);
+                return 1;
             }
-            if (logLevel > 3) printError("DEBUG: async->Wait() was successfully executed.\n");
-            VSS_SNAPSHOT_PROP prop;
-            result = backupComponents->GetSnapshotProperties(snapshotId, &prop);
-            if (!SUCCEEDED(result))
-            {
-                printError("Handle error in GetSnapshotProperties! ");
-                char s[MAX_PATH] = {0};
-                if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-                printError("\n",0);
-                return -1;
-            }
-            if (logLevel > 2)
-            {
-                char str[MAX_PATH*2] = {0};
-                sprintf(str,"INFO: The shadow copy was successfully created for volume %ws \n"
-                        "Devise: %ws \n"
-                        "Original volume: %ws \n"
-                        "Machine: %ws \n"
-                        "Service Machine: %ws \n",vol,prop.m_pwszSnapshotDeviceObject,prop.m_pwszOriginalVolumeName,prop.m_pwszOriginatingMachine,prop.m_pwszServiceMachine);
-                printError(str);
-            }
-            if (!rawMode) std::wcout << prop.m_pwszSnapshotDeviceObject << "\n";
-            else
-            {
-                if (logLevel > 3) printError("DEBUG: Prepare to raw mode.\n");
-                std::ofstream rfile;
-                DWORD nRead;
-                unsigned long long rRead = 0;
-                unsigned int buffSize = 4096;
-                unsigned char buf[4096];
-                unsigned long long DiskSize;
-                unsigned long long FreeBytesAvailable;
-                unsigned long long TotalNumberOfFreeBytes;
-                if(!GetDiskFreeSpaceEx(vol,
-                                       (PULARGE_INTEGER)&FreeBytesAvailable,
-                                       (PULARGE_INTEGER)&DiskSize,
-                                       (PULARGE_INTEGER)&TotalNumberOfFreeBytes
-                                       ))
-                {
-                    printError("ERROR: Can not get destination volume size. ");
-                    char s[MAX_PATH] = {0};
-                    if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-                    printError("\n",0);
-                    return -1;
-                }
-                if (logLevel > 3)
-                {
-                    char str[MAX_PATH*2] = {0};
-                    sprintf(str,"DEBUG: Source disk size detected us %llu bytes.\n",DiskSize);
-                    printError(str);
-                }
-                HANDLE hDisk = CreateFile(prop.m_pwszSnapshotDeviceObject,
-                                          GENERIC_READ, FILE_SHARE_READ,
-                                          NULL, OPEN_EXISTING, 0, NULL);
-                if (!hDisk)
-                {
-                    printError("ERROR: Can not open snapshot device object. ");
-                    char s[MAX_PATH] = {0};
-                    if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-                    printError("\n",0);
-                    return -1;
-                }
-                if (logLevel > 3) printError("DEBUG: The snapshot device object was successfully opened.\n");
-                if (rawfile)
-                {
-                    rfile.open(rawfile,std::ios_base::binary);
-                    if (!rfile.is_open())
-                    {
-                        printError("ERROR: Can not open output file: ");
-                        printError(rawfile,0);
-                        printError(" for raw output! ",0);
-                        printError(strerror(errno),0);
-                        printError("\n",0);
-                        return -1;
-                    }
-                    if (logLevel > 3) printError("DEBUG: The output file was successfully opened\n");
-
-                }
-                if (logLevel > 3) printError("DEBUG: Try to start transfer.\n");
-                for (ULONGLONG i = DiskSize;i >= buffSize;i=i-buffSize)
-                {
-                    ReadFile(hDisk, buf, buffSize, &nRead, NULL);
-                    if (!nRead)
-                    {
-                        printError("ERROR: Can not read the shadow copy. ");
-                        char s[MAX_PATH] = {0};
-                        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-                        printError("\n",0);
-                    }
-                    rRead = rRead+nRead;
-                    if (rawfile)
-                    {
-                        rfile.write((char*)&buf,buffSize);
-                        if (rfile.bad())
-                        {
-                            printError("ERROR: Can not write to ");
-                            printError(rawfile,0);
-                            printError(" file. ",0);
-                            printError(strerror(errno),0);
-                            printError("\n",0);
-                            return -1;
-                        }
-                        if (i==buffSize) rfile.close();
-                    }else std::cout.write((char*)&buf,buffSize);
-
-
-                }
-                int dot = 0;//for debug
-                dot++;
-
-                if (rRead < DiskSize)
-                {
-                    if (logLevel > 3) printError("DEBUG: Tail smaller 4096 bytes detected. Writing it in byte mode.\n");
-                    ReadFile(hDisk, buf, (DWORD)(DiskSize - rRead), &nRead, NULL);
-                    rRead = rRead+nRead;
-                    for (unsigned int i=0;i < nRead;i++)
-                    {
-                        if (rawfile)
-                        {
-                            rfile.write((char*)&buf[i],1);
-                            if (rfile.bad())
-                            {
-                                printError("ERROR: Can not write to ");
-                                printError(rawfile,0);
-                                printError(" file. ");
-                                printError(strerror(errno),0);
-                                printError("\n",0);
-                                return -1;
-                            }
-                        }else std::cout.write((char*)&buf[i],1);
-                    }
-                    if (logLevel > 3) printError("DEBUG: Transfer comleted, close files.\n");
-                    if (rawfile)
-                    {
-                        rfile << std::flush;
-                        rfile.close();
-                    }else std::cout << std::flush;
-                }
-                CloseHandle(hDisk);
-                if (logLevel > 2)
-                {
-                    char s[MAX_PATH] = {0};
-                    sprintf(s,"INFO: %llu bytes transfered\n",rRead);
-                    printError(s);
-                }
-            }
-            backupComponents->Release();
         }
-        else
-        {
-            printError("ERROR: Can not acces Vssapi.dll::CreateVssBackupComponentsInternal() ");
-            char s[MAX_PATH] = {0};
-            if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-            printError("\n",0);
-            return -1;
-        }
-        FreeLibrary(vssapidll);
-        FreeLibrary(ole32dll);
+        xp = true;
+        //temp
+        log.printError("ERROR: Windows XP or 2003 is not supported in this version.\n");
+        return 0;
     }
-    else
+    if (logLevel > 3) log.printError("DEBUG: API CreateVssBackupComponents from Vssapi.dll was successfully opened.\n");
+    CoInitialize___ CoInitialize = (CoInitialize___)GetProcAddress(ole32dll, "CoInitialize");
+    if (!CoInitialize)
     {
-        printError("ERROR: Vssapi.dll can not load. ");
+        log.printError("Error! Can not acces ole32.dll::CoInitialize()\n");
         char s[MAX_PATH] = {0};
-        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))printError(s,0);
-        printError("\n",0);
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
         return -1;
     }
-    if (logLevel > 3) printError("DEBUG: All operations comleated, goodbye!\n");
+    if (logLevel > 3) log.printError("DEBUG: CoInitialize api from ole32.dll was successfully loaded.\n");
+    if (!SUCCEEDED(result = (CoInitialize)(0)))
+    {
+        log.printError("Error call ole32.dll::CoInitialize()! ");
+        if (result == S_FALSE)
+            log.printError("The COM library is already initialized on this thread.");
+        if (result == RPC_E_CHANGED_MODE)
+            log.printError("A previous call to CoInitializeEx specified the concurrency model for this thread as multithread apartment (MTA). This could also indicate that a change from neutral-threaded apartment to single-threaded apartment has occurred.");
+        if (result == E_ACCESSDENIED)
+            log.printError("CoInitialize caller does not have sufficient privileges or is not an administrator.");
+        if (result == E_OUTOFMEMORY)
+            log.printError("CoInitialize caller is out of memory or other system resources.");
+        if (result == E_INVALIDARG)
+            log.printError("CoInitialize parameter is incorrect.");
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: CoInitialize api from ole32.dll was successfully executed.\n");
+    if (!SUCCEEDED((cvbc)(&backupComponents)))
+    {
+        log.printError("ERROR: Can not execute CreateVssBackupComponents! Are u Administrator? ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: CreateVssBackupComponents api from vssapi.dll was successfully executed.\n");
+    VSS_ID snapshotSetId;
+    if (!SUCCEEDED(result = backupComponents->InitializeForBackup()))
+    {
+        log.printError("Error in InitializeForBackup(), are u running native achitecture (x86 of x64)?\n");
+        if (result == S_OK) log.printError("Successfully initialized the specified document for backup.");
+        if (result == E_ACCESSDENIED)
+            log.printError("The caller does not have sufficient backup privileges or is not an administrator.");
+        if (result == E_OUTOFMEMORY)
+            log.printError("The caller is out of memory or other system resources.");
+        if (result == VSS_E_BAD_STATE)
+            log.printError("The backup components object is not initialized, this method has been called during a restore operation, or this method has not been called within the correct sequence.");
+        if (result == VSS_E_INVALID_XML_DOCUMENT)
+            log.printError("The XML document is not valid. Check the event log for details. For more information, see Event and Error Handling Under VSS.");
+        /*if (result == VSS_E_UNEXPECTED)
+                log.printError("Unexpected error. The error code is logged in the error log file. For more information, see Event and Error Handling Under VSS.");*/
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: InitializeForBackup() was successfully executed.\n");
+    if (logLevel > 1&&drive == 'C')log.printError("WARNING: Bootable system state is being performed.\n");
+    if (!SUCCEEDED(backupComponents->SetBackupState(compMode, drive == 'C', bkpType)))
+    {
+        log.printError("ERROR: Error in backupComponents->SetBackupState!\n");
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: SetBackupState() was successfully executed.\n");
+    if (!xp)
+    {
+        if (!SUCCEEDED(backupComponents->SetContext(bkpContext)))
+        {
+            if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_BACKUP)))
+            {
+                if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_CLIENT_ACCESSIBLE_WRITERS)))
+                {
+                    if (!SUCCEEDED(backupComponents->SetContext(VSS_CTX_APP_ROLLBACK)))
+                    {
+                        log.printError("Error in backupComponents->SetContext! ");
+                        char s[MAX_PATH] = {0};
+                        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+                        log.printError("\n",0);
+                        return -1;
+                    }
+                }
+            }
+        }
+        if (logLevel > 3) log.printError("DEBUG: SetContext() was successfully executed.\n");
+    }
+    VSS_ID snapshotId;
+    if (!SUCCEEDED(result = backupComponents->StartSnapshotSet(&snapshotSetId)))
+    {
+        log.printError("Error in backupComponents->StartSnapshotSet!\n");
+        if (result == E_INVALIDARG)log.printError("One of the parameter values is not valid.");
+        if (result == VSS_E_SNAPSHOT_SET_IN_PROGRESS)log.printError("The creation of a shadow copy is in progress, and only one shadow copy creation operation can be in progress at one time. Either wait to try again or return with a failure error code.");
+        if (result == E_OUTOFMEMORY)log.printError("The caller is out of memory or other system resources.");
+        if (result == VSS_E_BAD_STATE)log.printError("The backup components object is not initialized, this method has been called during a restore operation, or this method has not been called within the correct sequence.");
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: StartSnapshotSet() was successfully executed.\n");
+    if (!SUCCEEDED(result = backupComponents->AddToSnapshotSet(vol, GUID_NULL, &snapshotId)))
+    {
+
+        log.printError("Error in AddToSnapshotSet()\n");
+        if (result == E_ACCESSDENIED)
+            log.printError("The caller does not have sufficient backup privileges or is not an administrator.");
+        if (result == E_INVALIDARG)
+            log.printError("One of the parameter values is not valid");
+        if (result == VSS_E_BAD_STATE)
+            log.printError("The backup components object is not initialized, this method has been called during a restore operation, or this method has not been called within the correct sequence.");
+        if (result == VSS_E_MAXIMUM_NUMBER_OF_VOLUMES_REACHED)
+            log.printError("The maximum number of volumes or remote file shares have been added to the shadow copy set. The specified volume or remote file share was not added to the shadow copy set.");
+        if (result == VSS_E_MAXIMUM_NUMBER_OF_SNAPSHOTS_REACHED)
+            log.printError("The volume or remote file share has been added to the maximum number of shadow copy sets. The specified volume or remote file share was not added to the shadow copy set.");
+        if (result == E_OUTOFMEMORY)
+            log.printError("The caller is out of memory or other system resources.");
+        if (result == 0x8004232CL)
+            log.printError("The specified volume is nested too deeply to participate in the VSS operation. Possible reasons for this error include the following:\n"
+                           "Trying to create a shadow copy of a volume that resides on a VHD that is contained in another VHD.\n"
+                           "Trying to create a shadow copy of a VHD volume when the volume that contains the VHD is also in the same shadow copy set.");
+        if (result == VSS_E_OBJECT_NOT_FOUND)
+            log.printError("pwszVolumeName does not correspond to an existing volume or remote file share");
+        if (result == VSS_E_PROVIDER_NOT_REGISTERED)
+            log.printError("ProviderId does not correspond to a registered provider.");
+        if (result == VSS_E_PROVIDER_VETO)
+            log.printError("Expected provider error. The provider logged the error in the event log. For more information, see Event and Error Handling Under VSS.");
+        if (result == VSS_E_SNAPSHOT_SET_IN_PROGRESS)
+            log.printError("Another shadow copy creation is already in progress. Occurs when adding a CSV volume to a snapshot set from multiple nodes at the same time, or while adding a scale out share to the snapshot set from multiple SMB client nodes at the same time.");
+        if (result == VSS_E_VOLUME_NOT_SUPPORTED)
+            log.printError("The value of the ProviderId parameter is GUID_NULL and no VSS provider indicates that it supports the specified volume or remote file share.");
+        if (result == VSS_E_VOLUME_NOT_SUPPORTED_BY_PROVIDER)
+            log.printError("The volume or remote file share is not supported by the specified provider.");
+        if (result == VSS_E_UNEXPECTED_PROVIDER_ERROR)
+            log.printError("The provider returned an unexpected error code. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: AddToSnapshotSet() was successfully executed.\n");
+    IVssAsync *async;
+    if (!SUCCEEDED(result = backupComponents->DoSnapshotSet(&async)))
+    {
+        log.printError("Error in backupComponents->DoSnapshotSet!\n");
+        if (result == E_ACCESSDENIED)
+            log.printError("The caller does not have sufficient backup privileges or is not an administrator.");
+        if (result == E_INVALIDARG)
+            log.printError("ppAsyncdoes not point to a valid pointer; that is, it is NULL.");
+        if (result == E_OUTOFMEMORY)
+            log.printError("aThe caller is out of memory or other system resources.");
+        if (result == VSS_E_BAD_STATE)
+            log.printError("The backup components object has not been initialized or the prerequisite calls for a given shadow copy context have not been made prior to calling DoSnapshotSet.");
+        if (result == VSS_E_INSUFFICIENT_STORAGE)
+            log.printError("The system or provider has insufficient storage space. If possible delete any old or unnecessary persistent shadow copies and try again. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
+        if (result == VSS_E_FLUSH_WRITES_TIMEOUT)
+            log.printError("The system was unable to flush I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.");
+        if (result == VSS_E_HOLD_WRITES_TIMEOUT)
+            log.printError("The system was unable to hold I/O writes. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times.");
+        if (result == VSS_E_NESTED_VOLUME_LIMIT)
+            log.printError("The specified volume is nested too deeply to participate in the VSS operation.");
+        if (result == VSS_E_PROVIDER_VETO)
+            log.printError("The provider was unable to perform the request at this time. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. "
+                           "This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
+        if (result == VSS_E_REBOOT_REQUIRED)
+            log.printError("The provider encountered an error that requires the user to restart the computer.");
+        if (result == VSS_E_TRANSACTION_FREEZE_TIMEOUT)
+            log.printError("The system was unable to freeze the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).");
+        if (result == VSS_E_TRANSACTION_THAW_TIMEOUT)
+            log.printError("The system was unable to thaw the Distributed Transaction Coordinator (DTC) or the Kernel Transaction Manager (KTM).");
+        if (result == VSS_E_UNEXPECTED)
+            log.printError("Unexpected error. The error code is logged in the error log file. For more information, see Event and Error Handling Under VSS.");
+        if (result == VSS_E_UNEXPECTED_PROVIDER_ERROR)
+            log.printError("The provider returned an unexpected error code. This can be a transient problem. It is recommended to wait ten minutes and try again, up to three times. This error code is only returned via the QueryStatus method on the IVssAsync interface returned in the ppAsync parameter.");
+        log.printError("\n",0);//*/
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: DoSnapshotSet() was successfully executed.\n");
+    result = async->Wait();
+    async->Release();
+
+    if (!SUCCEEDED(result))
+    {
+        log.printError("Error wait for snapshot create! ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: async->Wait() was successfully executed.\n");
+    VSS_SNAPSHOT_PROP prop;
+    result = backupComponents->GetSnapshotProperties(snapshotId, &prop);
+    if (!SUCCEEDED(result))
+    {
+        log.printError("Handle error in GetSnapshotProperties! ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 2)
+    {
+        char str[MAX_PATH*2] = {0};
+        sprintf(str,"INFO: The shadow copy was successfully created for volume %ws \n"
+                    "Devise: %ws \n"
+                    "Original volume: %ws \n"
+                    "Machine: %ws \n"
+                    "Service Machine: %ws \n",vol,prop.m_pwszSnapshotDeviceObject,prop.m_pwszOriginalVolumeName,prop.m_pwszOriginatingMachine,prop.m_pwszServiceMachine);
+        log.printError(str);
+    }
+    if (!rawMode)
+    {
+        std::wcout << prop.m_pwszSnapshotDeviceObject << "\n";
+        backupComponents->Release();
+        FreeLibrary(vssapidll);
+        FreeLibrary(ole32dll);
+        if (logLevel > 3) log.printError("DEBUG: All operations comleated, goodbye!\n");
+        return 0;
+    }
+    if (logLevel > 3) log.printError("DEBUG: Prepare to raw mode.\n");
+    std::ofstream rfile;
+    DWORD nRead;
+    unsigned long long rRead = 0;
+    unsigned int buffSize = 4096;
+    unsigned char buf[4096];
+    unsigned long long DiskSize;
+    unsigned long long FreeBytesAvailable;
+    unsigned long long TotalNumberOfFreeBytes;
+    if(!GetDiskFreeSpaceEx(vol,
+                           (PULARGE_INTEGER)&FreeBytesAvailable,
+                           (PULARGE_INTEGER)&DiskSize,
+                           (PULARGE_INTEGER)&TotalNumberOfFreeBytes
+                           ))
+    {
+        log.printError("ERROR: Can not get destination volume size. ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3)
+    {
+        char str[MAX_PATH*2] = {0};
+        sprintf(str,"DEBUG: Source disk size detected us %llu bytes.\n",DiskSize);
+        log.printError(str);
+    }
+    HANDLE hDisk = CreateFile(prop.m_pwszSnapshotDeviceObject,
+                              GENERIC_READ, FILE_SHARE_READ,
+                              NULL, OPEN_EXISTING, 0, NULL);
+    if (!hDisk)
+    {
+        log.printError("ERROR: Can not open snapshot device object. ");
+        char s[MAX_PATH] = {0};
+        if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+        log.printError("\n",0);
+        return -1;
+    }
+    if (logLevel > 3) log.printError("DEBUG: The snapshot device object was successfully opened.\n");
+    if (rawfile)
+    {
+        rfile.open(rawfile,std::ios_base::binary);
+        if (!rfile.is_open())
+        {
+            log.printError("ERROR: Can not open output file: ");
+            log.printError(rawfile,0);
+            log.printError(" for raw output! ",0);
+            log.printError(strerror(errno),0);
+            log.printError("\n",0);
+            return -1;
+        }
+        if (logLevel > 3) log.printError("DEBUG: The output file was successfully opened\n");
+
+    }
+    if (logLevel > 3) log.printError("DEBUG: Try to start transfer.\n");
+    for (ULONGLONG i = DiskSize;i >= buffSize;i=i-buffSize)
+    {
+        ReadFile(hDisk, buf, buffSize, &nRead, NULL);
+        if (!nRead)
+        {
+            log.printError("ERROR: Can not read the shadow copy. ");
+            char s[MAX_PATH] = {0};
+            if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
+            log.printError("\n",0);
+        }
+        rRead = rRead+nRead;
+        if (rawfile)
+        {
+            rfile.write((char*)&buf,buffSize);
+            if (rfile.bad())
+            {
+                if(networkMode)
+                {
+                    //отрефакорить это дерьмо;
+                    rfile.close();
+                    rfile.open(rawfile,std::ios_base::binary);
+                    {
+
+                    }
+
+                }
+                log.printError("ERROR: Can not write to ");
+                log.printError(rawfile,0);
+                log.printError(" file. ",0);
+                log.printError(strerror(errno),0);
+                log.printError("\n",0);
+                return -1;
+            }
+            if (i==buffSize) rfile.close();
+        }else std::cout.write((char*)&buf,buffSize);
+    }
+    //сделать это говно функцией, получать хвост остатком от деления
+    if (rRead < DiskSize)
+    {
+        if (logLevel > 3) log.printError("DEBUG: Tail smaller 4096 bytes detected. Writing it in byte mode.\n");
+        ReadFile(hDisk, buf, (DWORD)(DiskSize - rRead), &nRead, NULL);
+        rRead = rRead+nRead;
+        for (unsigned int i=0;i < nRead;i++)
+        {
+            if (rawfile)
+            {
+                rfile.write((char*)&buf[i],1);
+                if (rfile.bad())
+                {
+                    log.printError("ERROR: Can not write to ");
+                    log.printError(rawfile,0);
+                    log.printError(" file. ");
+                    log.printError(strerror(errno),0);
+                    log.printError("\n",0);
+                    return -1;
+                }
+            }else std::cout.write((char*)&buf[i],1);
+        }
+        if (logLevel > 3) log.printError("DEBUG: Transfer comleted, close files.\n");
+        if (rawfile)
+        {
+            rfile << std::flush;
+            rfile.close();
+        }else std::cout << std::flush;
+    }
+    CloseHandle(hDisk);
+    if (logLevel > 2)
+    {
+        char s[MAX_PATH] = {0};
+        sprintf(s,"INFO: %llu bytes transfered\n",rRead);
+        log.printError(s);
+    }
+    backupComponents->Release();
+    FreeLibrary(vssapidll);
+    FreeLibrary(ole32dll);
+    if (logLevel > 3) log.printError("DEBUG: All operations comleated, goodbye!\n");
     return 0;
 }
