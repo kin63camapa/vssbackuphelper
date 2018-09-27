@@ -7,6 +7,7 @@ bool logMode = false;
 bool LOG::LogFileOpen(char *logfile)
 {
      this->logfile.open(logfile,std::ios_base::app);
+     this->logfile.rdbuf()->pubsetbuf( 0, 0 );
      error=errno;
      return bool(this->logfile.is_open());
 }
@@ -25,8 +26,8 @@ void LOG::printError(char * error,bool timestamp)
         tm[strlen(tm)-1] = ' ';
     }
     else tm = "";
-    if (logMode) logfile << tm << error;
-    else std::cerr << tm << error;
+    if (logMode) logfile << tm << error << std::flush;
+    else std::cerr << tm << error << std::flush;
 }
 
 void printhelp(char *cmd,bool err,char error[])

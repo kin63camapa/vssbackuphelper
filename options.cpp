@@ -202,10 +202,11 @@ bool parseOptions(int argc, char *argv[])
                 parsedOpts++;
                 if ((argc > i+1) && (argv[i+1][0] != '-'))
                 {
-                    rawfile = new char[]=argv[i+1];
+                    rawfile = new char[] = argv[i+1];
                     i++;
                     parsedOpts++;
                 }
+                else rawfile = NULL;
             }
             if (!strcmp(argv[i],"-component-mode"))
             {

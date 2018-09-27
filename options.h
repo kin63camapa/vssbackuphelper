@@ -4,7 +4,7 @@
 #include <vss.h>
 #include <log.h>
 #define PRODVER_
-#define PRODVER "0.0.0.2pa"
+#define PRODVER "0.0.0.4"
 #define PROGVER "VSSBackupHelper version"PRODVER"\n"
 #define LOGFILE "./vssadmin.log"
 //extern bool logMode;//log.h

@@ -22,5 +22,6 @@ HEADERS += \
     options.h \
     rawout.h
 OTHER_FILES += vssbackuphelper32.rc \
-    vssbackuphelper64.rc
+    vssbackuphelper64.rc \
+    README.md
 

@@ -1,5 +1,7 @@
 #include <iostream>
 #include <windows.h>
+#include <io.h>
+#include <fcntl.h>
 #include <Winternl.h>
 #include <vss.h>
 #include <vswriter.h>
@@ -288,6 +290,11 @@ int main(int argc, char* argv[])
     unsigned long long DiskSize;
     unsigned long long FreeBytesAvailable;
     unsigned long long TotalNumberOfFreeBytes;
+    if (!rawfile)
+    {
+        std::cout.rdbuf()->pubsetbuf( 0, 0 );
+        _setmode( _fileno( stdout ),  _O_BINARY );
+    }
     if(!GetDiskFreeSpaceEx(vol,
                            (PULARGE_INTEGER)&FreeBytesAvailable,
                            (PULARGE_INTEGER)&DiskSize,
@@ -298,7 +305,7 @@ int main(int argc, char* argv[])
         char s[MAX_PATH] = {0};
         if (FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,NULL,GetLastError(),1033,s,MAX_PATH-1,NULL))log.printError(s,0);
         log.printError("\n",0);
-        return -1;
+        return -1;//todo force mode
     }
     if (logLevel > 3)
     {
